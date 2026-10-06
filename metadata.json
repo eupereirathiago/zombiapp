@@ -1,0 +1,6 @@
+{
+  "name": "Zombicide Companion App",
+  "description": "Dashboard tático interativo para partidas de Zombicide com controle de turnos, XP, habilidades por nível, ferimentos e inventário integrado às cartas físicas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
