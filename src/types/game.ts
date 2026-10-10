@@ -22,11 +22,21 @@ export interface ItemStats {
   accuracy: string; // e.g., "4+", "3+", "5+", "Auto", "-"
   damage: number;
   specialRule?: string;
+  secondaryMode?: {
+    modeName: string; // e.g., "BLADE (Corpo a Corpo)"
+    range: string;
+    dice: number;
+    accuracy: string;
+    damage: number;
+    noise_on_use: boolean;
+  };
 }
 
 export interface GameItem {
   id: string;
   name: string;
+  card_title_en?: string;
+  image_url?: string;
   category: ItemCategory;
   edition: string;
   is_akimbo: boolean;
@@ -110,6 +120,7 @@ export interface SurvivorState {
 export interface UserProfile {
   id: string;
   username: string;
+  avatar_url?: string;
   password_hash: string; // Simulated Argon2id / Bcrypt hash string
   jwt_token: string;
   created_at: string;
@@ -120,6 +131,7 @@ export type SessionStatus = 'LOBBY' | 'IN_PROGRESS' | 'FINISHED';
 export interface JoinedRoomPlayer {
   user_id: string;
   username: string;
+  avatar_url?: string;
   is_host: boolean;
   joined_at: string;
 }

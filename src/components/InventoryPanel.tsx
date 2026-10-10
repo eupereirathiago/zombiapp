@@ -4,8 +4,10 @@ import {
   InventorySlots,
   SlotKey,
   ItemCategory,
+  ZombicideEdition,
 } from '../types/game';
-import { ITEMS_DATABASE } from '../data/zombicideCatalog';
+import { ITEMS_DATABASE, EDITION_LABELS } from '../data/zombicideCatalog';
+import { CardArtPreview } from './CardArtPreview';
 import {
   Search,
   Volume2,
@@ -19,10 +21,12 @@ import {
   ShieldAlert,
   Sparkles,
   Dices,
+  X,
 } from 'lucide-react';
 
 interface InventoryPanelProps {
   inventory: InventorySlots;
+  actionsLeft: number;
   hasAmbidextrous: boolean;
   meleeDiceBonus: number;
   rangedDiceBonus: number;
@@ -46,8 +50,17 @@ const CATEGORY_LABELS: Record<ItemCategory | 'ALL', string> = {
   WOUND: 'Ferimento',
 };
 
+const SLOT_LABELS: Record<SlotKey, string> = {
+  handLeft: 'Mão Esquerda (Principal)',
+  handRight: 'Mão Direita (Secundária)',
+  backpack0: 'Mochila · Slot 1',
+  backpack1: 'Mochila · Slot 2',
+  backpack2: 'Mochila · Slot 3',
+};
+
 export const InventoryPanel: React.FC<InventoryPanelProps> = ({
   inventory,
+  actionsLeft,
   hasAmbidextrous,
   meleeDiceBonus,
   rangedDiceBonus,
@@ -62,9 +75,20 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<ItemCategory | 'ALL'>('ALL');
+  const [editionFilter, setEditionFilter] = useState<ZombicideEdition | 'ALL'>('ALL');
   const [selectedSourceSlot, setSelectedSourceSlot] = useState<SlotKey | null>(null);
   const [draggedSlot, setDraggedSlot] = useState<SlotKey | null>(null);
   const [targetSlotForSearch, setTargetSlotForSearch] = useState<SlotKey | null>(null);
+
+  const availableItemEditions = useMemo(() => {
+    const set = new Set<string>();
+    ITEMS_DATABASE.forEach((item) => {
+      if (item.category !== 'WOUND' && item.edition) {
+        set.add(item.edition);
+      }
+    });
+    return ['ALL', ...Array.from(set)] as (ZombicideEdition | 'ALL')[];
+  }, []);
 
   const isAkimboPaired = useMemo(() => {
     const left = inventory.handLeft;
@@ -95,13 +119,17 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
       if (item.category === 'WOUND') return false;
       const matchesCategory =
         categoryFilter === 'ALL' || item.category === categoryFilter;
+      const matchesEdition =
+        editionFilter === 'ALL' || item.edition === editionFilter;
+      const q = searchQuery.toLowerCase();
       const matchesSearch =
         searchQuery.trim() === '' ||
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
+        item.name.toLowerCase().includes(q) ||
+        (item.card_title_en && item.card_title_en.toLowerCase().includes(q)) ||
+        item.description.toLowerCase().includes(q);
+      return matchesCategory && matchesEdition && matchesSearch;
     });
-  }, [searchQuery, categoryFilter]);
+  }, [searchQuery, categoryFilter, editionFilter]);
 
   const handleSlotClick = (slotKey: SlotKey, currentItem: GameItem | null) => {
     if (selectedSourceSlot === null) {
@@ -227,55 +255,70 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
             </span>
           </button>
         ) : isWound ? (
-          <div className="flex-1 flex flex-col justify-center py-3">
+          <div className="flex-1 flex flex-col justify-center py-3 space-y-2">
             <div className="flex items-center gap-2 text-red-400 font-bold text-sm">
               <ShieldAlert className="w-5 h-5 shrink-0" />
               <span>SLOT BLOQUEADO POR FERIMENTO</span>
             </div>
-            <p className="text-xs text-red-200/80 mt-1.5 leading-relaxed">
-              {item.description} Use o botão de Cura no painel de Vida ou um Kit Médico para liberar este slot.
-            </p>
+            <ul className="text-xs text-red-200/90 space-y-1 pl-4 list-disc">
+              <li>Este slot está inutilizado enquanto você estiver ferido.</li>
+              <li>
+                Para liberar: toque em um <strong>Coração Partido 💔</strong> no topo da ficha ou use uma carta de <strong>Kit Médico</strong>.
+              </li>
+            </ul>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col justify-between py-2.5">
-            <div>
-              <div className="flex items-start justify-between gap-2">
-                <h4 className="font-bold text-base text-white leading-snug">
-                  {item.name}
-                </h4>
-                <div className="flex items-center gap-1.5 shrink-0 text-zinc-400">
-                  {item.noise_on_use ? (
-                    <span title="Gera ficha de barulho ao usar" className="text-red-500">
-                      <Volume2 className="w-4 h-4" />
-                    </span>
-                  ) : (
-                    <span title="Silencioso" className="text-zinc-500">
-                      <VolumeX className="w-4 h-4" />
-                    </span>
-                  )}
-                  {item.can_open_doors && (
-                    <span
-                      title={
-                        item.door_noise
-                          ? 'Arromba portas com barulho'
-                          : 'Arromba portas silenciosamente'
-                      }
-                      className="text-red-400"
-                    >
-                      <DoorOpen className="w-4 h-4" />
-                    </span>
-                  )}
-                </div>
+          <div className="flex-1 flex flex-col justify-between py-2.5 gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-24 shrink-0">
+                <CardArtPreview item={item} size="sm" />
               </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    {item.card_title_en && (
+                      <span className="block text-[10px] font-mono-tabular uppercase tracking-wider text-red-400 font-bold">
+                        {item.card_title_en}
+                      </span>
+                    )}
+                    <h4 className="font-bold text-base text-white leading-snug">
+                      {item.name}
+                    </h4>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 text-zinc-400">
+                    {item.noise_on_use ? (
+                      <span title="Gera ficha de barulho ao usar" className="text-red-500">
+                        <Volume2 className="w-4 h-4" />
+                      </span>
+                    ) : (
+                      <span title="Silencioso" className="text-zinc-500">
+                        <VolumeX className="w-4 h-4" />
+                      </span>
+                    )}
+                    {item.can_open_doors && (
+                      <span
+                        title={
+                          item.door_noise
+                            ? 'Arromba portas com barulho'
+                            : 'Arromba portas silenciosamente'
+                        }
+                        className="text-red-400"
+                      >
+                        <DoorOpen className="w-4 h-4" />
+                      </span>
+                    )}
+                  </div>
+                </div>
 
-              <p className="text-xs text-zinc-400 mt-1 line-clamp-2">
-                {item.description}
-              </p>
+                <p className="text-xs text-zinc-400 mt-1 line-clamp-3">
+                  {item.description}
+                </p>
+              </div>
             </div>
 
             {/* Weapon Combat Telemetry Grid */}
             {item.stats_json.dice > 0 ? (
-              <div className="mt-3 pt-2.5 border-t border-zinc-800/80 grid grid-cols-4 gap-2 text-center font-mono-tabular">
+              <div className="pt-2.5 border-t border-zinc-800/80 grid grid-cols-4 gap-2 text-center font-mono-tabular">
                 <div>
                   <span className="block text-[10px] text-zinc-400">Alcance</span>
                   <span className="text-sm font-semibold text-white">
@@ -308,7 +351,7 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="mt-3 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs text-red-400">
+              <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-xs text-red-400">
                 <span>Efeito Tático:</span>
                 <span className="font-semibold">
                   {item.stats_json.specialRule || 'Suporte Passivo'}
@@ -338,16 +381,30 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
               {isHandSlot && item.stats_json.dice > 0 && (
                 <button
                   type="button"
+                  disabled={actionsLeft <= 0}
                   onClick={() => onRollWeaponAttack(item, isAkimboPaired)}
-                  className="px-2.5 py-1 rounded text-xs font-semibold bg-red-600/20 text-red-300 border border-red-500/40 hover:bg-red-600/30 transition-colors flex items-center gap-1 whitespace-nowrap"
+                  title={
+                    actionsLeft <= 0
+                      ? 'Sem pontos de ação restantes neste turno'
+                      : 'Gastar 1 Ação para Atacar'
+                  }
+                  className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors flex items-center gap-1 whitespace-nowrap ${
+                    actionsLeft <= 0
+                      ? 'bg-zinc-900/50 text-zinc-500 border-zinc-800 opacity-50 cursor-not-allowed'
+                      : 'bg-red-600/20 text-red-300 border-red-500/40 hover:bg-red-600/30 cursor-pointer'
+                  }`}
                 >
                   <Dices className="w-3.5 h-3.5" />
-                  <span>Atacar</span>
+                  <span>{actionsLeft <= 0 ? 'Sem PA' : 'Atacar'}</span>
                 </button>
               )}
 
               {(item.id === 'eq_water' ||
                 item.id === 'eq_canned_food' ||
+                item.id === 'eq_bag_of_rice' ||
+                item.id === 'eq_apples' ||
+                item.id === 'eq_salted_meat' ||
+                item.id === 'eq_cookies' ||
                 item.id === 'eq_medkit') && (
                 <button
                   type="button"
@@ -452,7 +509,7 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
           </div>
 
           {/* Interactive Category Filter Controls */}
-          <div className="flex items-center gap-1 p-1 bg-black border border-zinc-800 rounded-lg overflow-x-auto">
+          <div className="flex items-center gap-1 p-1 bg-black border border-zinc-800 rounded-lg overflow-x-auto no-scrollbar">
             {(['ALL', 'MELEE', 'RANGED', 'SPECIAL', 'CONSUMABLE', 'PROTECTION'] as const).map(
               (cat) => (
                 <button
@@ -469,6 +526,48 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
                 </button>
               )
             )}
+          </div>
+        </div>
+
+        {/* Edition Filter Bar */}
+        <div className="mb-4">
+          <span className="block text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">
+            Filtrar Armas e Equipamentos por Edição:
+          </span>
+          <div className="flex items-center gap-1.5 p-1.5 bg-black border border-zinc-800 rounded-xl overflow-x-auto no-scrollbar">
+            {availableItemEditions.map((ed) => {
+              const count =
+                ed === 'ALL'
+                  ? ITEMS_DATABASE.filter((i) => i.category !== 'WOUND').length
+                  : ITEMS_DATABASE.filter(
+                      (i) => i.category !== 'WOUND' && i.edition === ed
+                    ).length;
+              return (
+                <button
+                  key={ed}
+                  type="button"
+                  onClick={() => setEditionFilter(ed)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    editionFilter === ed
+                      ? 'bg-red-600 text-white font-semibold shadow-sm'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+                  }`}
+                >
+                  <span>
+                    {EDITION_LABELS[ed as ZombicideEdition | 'ALL'] || ed}
+                  </span>
+                  <span
+                    className={`text-[10px] font-mono-tabular px-1.5 py-0.5 rounded ${
+                      editionFilter === ed
+                        ? 'bg-black/30 text-white'
+                        : 'bg-zinc-900 text-zinc-400'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -494,51 +593,38 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
         </div>
 
         {/* Filtered Cards Catalog */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[380px] overflow-y-auto pr-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[520px] overflow-y-auto pr-1">
           {filteredCatalog.map((item) => (
             <div
               key={item.id}
-              className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800/90 hover:border-zinc-700 flex flex-col justify-between transition-colors"
+              className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800/90 hover:border-red-600/60 flex flex-col justify-between transition-colors gap-3"
             >
-              <div>
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <span className="text-xs text-zinc-400">
-                      {CATEGORY_LABELS[item.category]}
-                      {item.is_akimbo ? ' · Akimbo' : ''}
-                    </span>
-                    <h4 className="text-sm font-bold text-white">{item.name}</h4>
-                  </div>
-                  <div className="flex items-center gap-1 text-zinc-400 shrink-0">
-                    {item.noise_on_use ? (
-                      <Volume2 className="w-3.5 h-3.5 text-red-500" title="Barulhento" />
-                    ) : (
-                      <VolumeX className="w-3.5 h-3.5 text-zinc-500" title="Silencioso" />
-                    )}
-                    {item.can_open_doors && (
-                      <DoorOpen className="w-3.5 h-3.5 text-red-400" title="Arromba Portas" />
-                    )}
-                  </div>
+              <div className="flex items-start gap-3">
+                <div className="w-24 shrink-0">
+                  <CardArtPreview item={item} size="sm" />
                 </div>
-
-                {item.stats_json.dice > 0 ? (
-                  <div className="mt-2 flex items-center gap-3 text-xs font-mono-tabular text-zinc-300">
-                    <span>Alc: {item.stats_json.range}</span>
-                    <span>·</span>
-                    <span>Dados: {item.stats_json.dice}</span>
-                    <span>·</span>
-                    <span>Acerto: {item.stats_json.accuracy}</span>
-                    <span>·</span>
-                    <span className="text-red-400">Dano: {item.stats_json.damage}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-1">
+                    <div>
+                      <span className="block text-[10px] font-mono-tabular text-red-400 font-semibold">
+                        {EDITION_LABELS[item.edition as ZombicideEdition] || item.edition}
+                      </span>
+                      <span className="text-[11px] text-zinc-400">
+                        {CATEGORY_LABELS[item.category]}
+                        {item.is_akimbo ? ' · Akimbo' : ''}
+                      </span>
+                      <h4 className="text-sm font-bold text-white leading-snug">
+                        {item.name}
+                      </h4>
+                    </div>
                   </div>
-                ) : (
-                  <div className="mt-2 text-xs text-red-400">
-                    {item.stats_json.specialRule}
-                  </div>
-                )}
+                  <p className="text-xs text-zinc-400 mt-1.5 line-clamp-3 leading-relaxed">
+                    {item.description}
+                  </p>
+                </div>
               </div>
 
-              <div className="mt-3 pt-2.5 border-t border-zinc-800/70 flex items-center justify-between gap-2">
+              <div className="pt-2.5 border-t border-zinc-800/70 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -550,7 +636,7 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
                   <Crosshair className="w-3.5 h-3.5" />
                   <span>
                     {targetSlotForSearch
-                      ? 'Equipar no Slot Selecionado'
+                      ? `Equipar em ${SLOT_LABELS[targetSlotForSearch]}`
                       : 'Adicionar ao Inventário'}
                   </span>
                 </button>
@@ -559,6 +645,161 @@ export const InventoryPanel: React.FC<InventoryPanelProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Modal de Escolha de Equipamento ao clicar em um Slot Vazio */}
+      {targetSlotForSearch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-4xl max-h-[90vh] flex flex-col rounded-2xl bg-[#0A0A0C] border border-red-600/70 shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-4 sm:px-6 py-4 border-b border-zinc-800 bg-gradient-to-r from-red-950/60 via-zinc-950 to-black flex items-center justify-between gap-3 shrink-0">
+              <div>
+                <span className="text-[11px] font-mono-tabular uppercase tracking-wider text-red-400 font-bold block">
+                  ESCOLHER EQUIPAMENTO PARA O SLOT
+                </span>
+                <h3 className="text-base sm:text-xl font-bold text-white font-display">
+                  {SLOT_LABELS[targetSlotForSearch]}
+                </h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTargetSlotForSearch(null)}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                title="Fechar seleção"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Filters & Search Bar */}
+            <div className="p-4 sm:px-6 border-b border-zinc-800/90 bg-zinc-950/70 space-y-3 shrink-0">
+              {/* Search Input */}
+              <div className="relative">
+                <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar carta pelo nome (ex: Pistola, Katana, Pé de Cabra, Escopeta, Água)..."
+                  className="w-full pl-10 pr-16 py-2.5 bg-black border border-zinc-800 rounded-xl text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
+
+              {/* Category + Edition Filter Strips */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-1 p-1 bg-black border border-zinc-800 rounded-lg overflow-x-auto no-scrollbar">
+                  {(
+                    [
+                      'ALL',
+                      'MELEE',
+                      'RANGED',
+                      'SPECIAL',
+                      'CONSUMABLE',
+                      'PROTECTION',
+                    ] as const
+                  ).map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setCategoryFilter(cat)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        categoryFilter === cat
+                          ? 'bg-red-600 text-white font-semibold'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      {CATEGORY_LABELS[cat]}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1 p-1 bg-black border border-zinc-800 rounded-lg overflow-x-auto no-scrollbar">
+                  {availableItemEditions.map((ed) => (
+                    <button
+                      key={ed}
+                      type="button"
+                      onClick={() => setEditionFilter(ed)}
+                      className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        editionFilter === ed
+                          ? 'bg-red-600 text-white font-semibold'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      {EDITION_LABELS[ed as ZombicideEdition | 'ALL'] || ed}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Cards Grid */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1">
+              {filteredCatalog.length === 0 ? (
+                <div className="py-12 text-center text-xs sm:text-sm text-zinc-400">
+                  Nenhuma carta encontrada para este filtro.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {filteredCatalog.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => {
+                        onEquipItem(item, targetSlotForSearch);
+                        setTargetSlotForSearch(null);
+                      }}
+                      className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-red-500 flex flex-col justify-between transition-all gap-3 cursor-pointer group"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-20 shrink-0">
+                          <CardArtPreview item={item} size="sm" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="block text-[10px] font-mono-tabular text-red-400 font-semibold">
+                            {EDITION_LABELS[item.edition as ZombicideEdition] ||
+                              item.edition}
+                          </span>
+                          <span className="text-[11px] text-zinc-400">
+                            {CATEGORY_LABELS[item.category]}
+                            {item.is_akimbo ? ' · Akimbo' : ''}
+                          </span>
+                          <h4 className="text-sm font-bold text-white leading-snug group-hover:text-red-400 transition-colors">
+                            {item.name}
+                          </h4>
+                          <p className="text-[11px] text-zinc-400 mt-1 line-clamp-2 leading-relaxed">
+                            {item.description}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEquipItem(item, targetSlotForSearch);
+                          setTargetSlotForSearch(null);
+                        }}
+                        className="w-full py-2 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-xs font-bold text-white transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      >
+                        <Crosshair className="w-3.5 h-3.5" />
+                        <span>Equipar neste Slot</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

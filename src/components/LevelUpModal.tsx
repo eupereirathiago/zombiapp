@@ -32,28 +32,28 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
   const isOrange = tier === 'ORANGE';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
       <div
-        className={`w-full max-w-xl rounded-2xl bg-[#0A0A0C] border ${
+        className={`w-full max-w-xl max-h-[90vh] flex flex-col rounded-2xl bg-[#0A0A0C] border ${
           isOrange ? 'border-orange-500/60' : 'border-red-500/70'
         } shadow-2xl overflow-hidden`}
       >
         {/* Top Header */}
         <div
-          className={`px-6 py-5 border-b ${
+          className={`px-4 sm:px-6 py-4 sm:py-5 border-b shrink-0 ${
             isOrange
               ? 'bg-gradient-to-r from-orange-950/60 via-zinc-950 to-black border-orange-500/30'
               : 'bg-gradient-to-r from-red-950/70 via-zinc-950 to-black border-red-500/40'
-          } flex items-center gap-4`}
+          } flex items-center gap-3.5 sm:gap-4`}
         >
           <CharacterAvatar
             character={character}
             variant="circle"
             size="md"
-            className={`border-2 ${isOrange ? 'border-orange-400' : 'border-red-500'}`}
+            className={`border-2 shrink-0 ${isOrange ? 'border-orange-400' : 'border-red-500'}`}
           />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 text-xs text-slate-300">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs text-slate-300">
               <span>{character.name}</span>
               <span aria-hidden="true">·</span>
               <span>@{survivorUsername}</span>
@@ -62,7 +62,7 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
                 {isOrange ? '19+ XP (Laranja)' : '43+ XP (Vermelho)'}
               </span>
             </div>
-            <h2 className="text-xl font-bold text-white mt-0.5 font-display">
+            <h2 className="text-base sm:text-xl font-bold text-white mt-0.5 font-display">
               {isManualEdit
                 ? `Alterar Habilidade de Nível ${isOrange ? 'Laranja' : 'Vermelho'}`
                 : `Parabéns! ${character.name} alcançou o Nível ${
@@ -73,7 +73,7 @@ export const LevelUpModal: React.FC<LevelUpModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
           <p className="text-sm text-slate-300">
             Escolha explicitamente <strong>1 habilidade</strong> entre as opções disponíveis para ativar permanentemente no painel do seu sobrevivente:
           </p>

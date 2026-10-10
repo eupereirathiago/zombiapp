@@ -52,3 +52,17 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #dc2626;
 }
+
+/* Hide scrollbars on horizontal touch carousels on mobile while keeping scroll functionality */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+button, a, input {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}

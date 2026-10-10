@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   UserProfile,
   GameSession,
@@ -25,24 +25,34 @@ import {
   Crown,
   ArrowRight,
   PlusCircle,
+  Eye,
+  EyeOff,
+  Camera,
+  Upload,
 } from 'lucide-react';
 
 interface AuthAndLobbyProps {
   users: UserProfile[];
   currentUser: UserProfile | null;
   session: GameSession | null;
-  onRegisterOrLogin: (username: string, passwordPlain: string) => {
+  onRegisterOrLogin: (username: string, avatarUrl?: string) => {
     success: boolean;
     message: string;
     user?: UserProfile;
   };
-  onHostCreateRoom: (roomName: string, roomCode: string, roomPasswordPlain: string) => {
+  onHostCreateRoom: (
+    hostNickname: string,
+    hostAvatarUrl: string,
+    roomName: string,
+    roomCode: string,
+    roomPasswordPlain: string
+  ) => {
     success: boolean;
     message: string;
   };
   onPlayerJoinRoom: (
     username: string,
-    userPasswordPlain: string,
+    avatarUrl: string,
     roomCode: string,
     roomPasswordPlain: string
   ) => {
@@ -56,6 +66,21 @@ interface AuthAndLobbyProps {
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
 
+const PROFILE_AVATAR_PRESETS = [
+  { id: 'av_wanda', label: 'Wanda', url: '/assets/survivors/Wanda.webp' },
+  { id: 'av_phil', label: 'Phil', url: '/assets/survivors/Phil.webp' },
+  { id: 'av_ned', label: 'Ned', url: '/assets/survivors/Ned.webp' },
+  { id: 'av_josh', label: 'Josh', url: '/assets/survivors/Josh.webp' },
+  { id: 'av_amy', label: 'Amy', url: '/assets/survivors/Amy.webp' },
+  { id: 'av_doug', label: 'Doug', url: '/assets/survivors/Doug.webp' },
+  { id: 'av_grindlock', label: 'Grindlock', url: '/assets/survivors/Grindlock.webp' },
+  { id: 'av_belle', label: 'Belle', url: '/assets/survivors/Belle.webp' },
+  { id: 'av_kim', label: 'Kim', url: '/assets/survivors/Kim.webp' },
+  { id: 'av_elsa', label: 'Elsa', url: '/assets/survivors/Elsa.webp' },
+  { id: 'av_raoul', label: 'Raoul', url: '/assets/survivors/Raoul.webp' },
+  { id: 'av_maddie', label: 'Maddie', url: '/assets/survivors/Maddie.webp' },
+];
+
 type WizardStep = 'STEP_1_ROOM_GATE' | 'STEP_2_CHARACTER_SELECT';
 type GateMode = 'HOST_CREATE' | 'PLAYER_JOIN';
 
@@ -63,7 +88,6 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   users,
   currentUser,
   session,
-  onRegisterOrLogin,
   onHostCreateRoom,
   onPlayerJoinRoom,
   onAddSurvivorToTable,
@@ -77,22 +101,25 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
     session ? 'PLAYER_JOIN' : 'HOST_CREATE'
   );
 
-  // User Auth Form State
+  // Nickname & Profile Avatar State (Shared between Host Create & Player Join)
   const [username, setUsername] = useState(currentUser?.username || '');
-  const [userPassword, setUserPassword] = useState('');
+  const [selectedAvatar, setSelectedAvatar] = useState<string>(
+    currentUser?.avatar_url || PROFILE_AVATAR_PRESETS[0].url
+  );
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Host Room Creation State
   const [roomName, setRoomName] = useState('Missão Zombicide #01');
-  const [roomCode, setRoomCode] = useState(
-    session?.room_code || 'ZMB204'
-  );
+  const [roomCode, setRoomCode] = useState(session?.room_code || 'ZMB204');
   const [roomPassword, setRoomPassword] = useState('');
+  const [showHostRoomPassword, setShowHostRoomPassword] = useState(false);
 
   // Player Join Room State
   const [joinRoomCode, setJoinRoomCode] = useState(
     session?.room_code || 'ZMB204'
   );
   const [joinRoomPassword, setJoinRoomPassword] = useState('');
+  const [showJoinRoomPassword, setShowJoinRoomPassword] = useState(false);
 
   const [feedback, setFeedback] = useState<{
     type: 'error' | 'success';
@@ -106,14 +133,28 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   const [editionFilter, setEditionFilter] = useState<ZombicideEdition | 'ALL'>('ALL');
   const [charSearch, setCharSearch] = useState('');
 
-  // Real-time username validation (RF01.1)
+  // Handle custom image upload from device for player profile
+  const handleCustomAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setSelectedAvatar(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Real-time nickname validation (supports optional leading @ like @lordvoldemort)
   const usernameValidation = useMemo(() => {
-    const clean = username.trim();
+    const clean = username.trim().replace(/^@+/, '');
     if (!clean) {
       return {
         valid: false,
+        clean: '',
         exists: false,
-        hint: 'Use de 3 a 20 caracteres alfanuméricos (a-z, 0-9, _), sem espaços.',
+        hint: 'Digite seu nickname (ex: @lordvoldemort) com 3 a 20 caracteres alfanuméricos.',
       };
     }
     const isValidFormat = USERNAME_REGEX.test(clean);
@@ -123,38 +164,34 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
     if (!isValidFormat) {
       return {
         valid: false,
+        clean,
         exists: false,
-        hint: 'Formato inválido: apenas letras, números e sublinhado (_) entre 3 e 20 caracteres.',
+        hint: 'Formato inválido: use apenas letras, números e sublinhado (_) entre 3 e 20 caracteres.',
       };
     }
     if (existingUser) {
       return {
         valid: true,
+        clean,
         exists: true,
-        hint: `Usuário @${existingUser.username} já registrado — digite sua senha de conta.`,
+        hint: `Nickname @${existingUser.username} reconhecido — pronto para entrar sem precisar de senha pessoal!`,
       };
     }
     return {
       valid: true,
+      clean,
       exists: false,
-      hint: `Username @${clean} disponível — será cadastrado automaticamente!`,
+      hint: `Nickname @${clean} disponível!`,
     };
   }, [username, users]);
 
-  // Host logs in/creates account AND creates room with password
+  // Host creates nickname + profile photo + room code + room password
   const handleHostSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
 
     if (!usernameValidation.valid) {
       setFeedback({ type: 'error', text: usernameValidation.hint });
-      return;
-    }
-    if (userPassword.length < 4) {
-      setFeedback({
-        type: 'error',
-        text: 'A senha do seu usuário deve ter pelo menos 4 caracteres.',
-      });
       return;
     }
     if (roomPassword.trim().length < 3) {
@@ -165,31 +202,27 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
       return;
     }
 
-    const authResult = onRegisterOrLogin(username.trim(), userPassword);
-    if (!authResult.success) {
-      setFeedback({ type: 'error', text: authResult.message });
-      return;
-    }
-
+    const cleanNick = usernameValidation.clean;
     const roomResult = onHostCreateRoom(
+      cleanNick,
+      selectedAvatar,
       roomName.trim() || 'Mesa Zombicide',
       roomCode.trim().toUpperCase() || 'ZMB204',
       roomPassword.trim()
     );
 
     if (roomResult.success) {
-      setSelectedPlayerForPick(username.trim());
+      setSelectedPlayerForPick(cleanNick);
       setFeedback({ type: 'success', text: roomResult.message });
-      setGateMode('PLAYER_JOIN');
       setJoinRoomCode(roomCode.trim().toUpperCase() || 'ZMB204');
-      setUserPassword('');
       setUsername('');
+      setWizardStep('STEP_2_CHARACTER_SELECT');
     } else {
       setFeedback({ type: 'error', text: roomResult.message });
     }
   };
 
-  // Other players create their user account and enter the Host's room with the Host's room password
+  // Other players create nickname + choose profile image + enter Host's room password
   const handlePlayerJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFeedback(null);
@@ -206,27 +239,29 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
       setFeedback({ type: 'error', text: usernameValidation.hint });
       return;
     }
-    if (userPassword.length < 4) {
+
+    if (!joinRoomPassword.trim()) {
       setFeedback({
         type: 'error',
-        text: 'Crie ou informe uma senha de usuário com pelo menos 4 caracteres.',
+        text: 'Digite a senha da sala fornecida pelo Host.',
       });
       return;
     }
 
+    const cleanNick = usernameValidation.clean;
     const joinRes = onPlayerJoinRoom(
-      username.trim(),
-      userPassword,
+      cleanNick,
+      selectedAvatar,
       joinRoomCode.trim().toUpperCase(),
       joinRoomPassword.trim()
     );
 
     if (joinRes.success) {
-      setSelectedPlayerForPick(username.trim());
+      setSelectedPlayerForPick(cleanNick);
       setFeedback({ type: 'success', text: joinRes.message });
       setUsername('');
-      setUserPassword('');
       setJoinRoomPassword('');
+      setWizardStep('STEP_2_CHARACTER_SELECT');
     } else {
       setFeedback({ type: 'error', text: joinRes.message });
     }
@@ -259,12 +294,82 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
     currentUser?.username ||
     '';
 
+  const renderProfileAvatarPicker = () => (
+    <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-semibold text-zinc-200 flex items-center gap-1.5">
+          <Camera className="w-3.5 h-3.5 text-red-500" />
+          <span>Escolha uma Imagem para seu Perfil</span>
+        </label>
+
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[11px] font-semibold text-red-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+        >
+          <Upload className="w-3 h-3" />
+          <span>Enviar Foto</span>
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleCustomAvatarUpload}
+          className="hidden"
+        />
+      </div>
+
+      <div className="flex items-center gap-3">
+        {/* Selected Profile Avatar Preview */}
+        <div className="relative shrink-0">
+          <img
+            src={selectedAvatar}
+            alt="Avatar do Jogador"
+            className="w-14 h-14 rounded-full object-cover object-top border-2 border-red-500 bg-black"
+          />
+          <span className="absolute -bottom-1 -right-1 px-1.5 py-0.5 rounded bg-red-600 text-[9px] font-bold text-white">
+            PERFIL
+          </span>
+        </div>
+
+        {/* Preset Avatars Grid */}
+        <div className="flex items-center gap-2 overflow-x-auto py-1 flex-1">
+          {PROFILE_AVATAR_PRESETS.map((preset) => {
+            const isSelected = selectedAvatar === preset.url;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => setSelectedAvatar(preset.url)}
+                title={`Escolher avatar ${preset.label}`}
+                className={`group flex flex-col items-center gap-1 p-1 rounded-xl border transition-all shrink-0 cursor-pointer ${
+                  isSelected
+                    ? 'border-red-500 bg-red-950/30 scale-105'
+                    : 'border-zinc-800 bg-black/60 opacity-70 hover:opacity-100 hover:border-zinc-700'
+                }`}
+              >
+                <img
+                  src={preset.url}
+                  alt={preset.label}
+                  className="w-9 h-9 rounded-full object-cover object-top"
+                />
+                <span className="text-[9px] font-medium text-zinc-400 group-hover:text-zinc-200">
+                  {preset.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8 space-y-5 sm:space-y-8">
       {/* Header */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 flex flex-col md:flex-row md:items-center justify-between gap-3.5">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-red-500 font-mono-tabular">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs text-red-500 font-mono-tabular">
             <span>PREPARAÇÃO DA PARTIDA</span>
             {session && (
               <>
@@ -275,7 +380,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
               </>
             )}
           </div>
-          <h1 className="text-xl sm:text-2xl font-bold text-white font-display">
+          <h1 className="text-lg sm:text-2xl font-bold text-white font-display">
             {wizardStep === 'STEP_1_ROOM_GATE'
               ? 'Login e Acesso à Sala'
               : 'Seleção de Personagens'}
@@ -283,11 +388,11 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
         </div>
 
         {/* Switch Buttons */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="grid grid-cols-2 sm:flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setWizardStep('STEP_1_ROOM_GATE')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            className={`px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer ${
               wizardStep === 'STEP_1_ROOM_GATE'
                 ? 'bg-red-600 text-white'
                 : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white'
@@ -301,16 +406,14 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
             type="button"
             disabled={!session}
             onClick={() => setWizardStep('STEP_2_CHARACTER_SELECT')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer disabled:opacity-40 ${
+            className={`px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer disabled:opacity-40 ${
               wizardStep === 'STEP_2_CHARACTER_SELECT'
                 ? 'bg-red-600 text-white'
                 : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>
-              Personagens ({CHARACTERS_CATALOG.length})
-            </span>
+            <span>Personagens ({CHARACTERS_CATALOG.length})</span>
           </button>
         </div>
       </div>
@@ -320,7 +423,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
          ===================================================================== */}
       {wizardStep === 'STEP_1_ROOM_GATE' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Left Column (7 Cols): Login + Create Room (Host) OR Join Room (Players) */}
+          {/* Left Column (7 Cols): Host Create Room OR Player Join Room */}
           <div className="lg:col-span-7 space-y-6">
             <div className="p-6 sm:p-8 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-6">
               {/* Mode Selector Tabs */}
@@ -360,44 +463,49 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
 
               {gateMode === 'HOST_CREATE' ? (
                 <form onSubmit={handleHostSubmit} className="space-y-5">
-                  <div className="border-b border-zinc-800 pb-3">
+                  <div className="border-b border-zinc-800 pb-3 space-y-2">
                     <h2 className="text-lg font-bold text-white font-display">
-                      Autenticação do Host e Criação da Sala
+                      Criação da Sala pelo Host
                     </h2>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      Crie seu usuário de Anfitrião (Host) e defina o código e a senha da sala. Os outros jogadores usarão essa senha para entrar.
-                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-zinc-300">
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          1
+                        </span>
+                        <span>Crie seu <strong>@nickname</strong></span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          2
+                        </span>
+                        <span>Escolha sua <strong>Foto</strong></span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          3
+                        </span>
+                        <span>Defina a <strong>Senha da Sala</strong></span>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Host User Credentials */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                        Username do Host (Único)
-                      </label>
+                  {/* Host Nickname (No personal password required) */}
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                      Nickname do Host
+                    </label>
+                    <div className="relative">
+                      <span className="text-red-500 font-mono-tabular font-bold text-sm absolute left-3.5 top-1/2 -translate-y-1/2">
+                        @
+                      </span>
                       <input
                         type="text"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
+                        value={username.replace(/^@+/, '')}
+                        onChange={(e) => setUsername(e.target.value.replace(/^@+/, ''))}
                         maxLength={20}
-                        placeholder="ex: thiago_host"
-                        className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
+                        placeholder="lordvoldemort"
+                        className="w-full pl-8 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                        Senha do Usuário Host
-                      </label>
-                      <div className="relative">
-                        <Lock className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="password"
-                          value={userPassword}
-                          onChange={(e) => setUserPassword(e.target.value)}
-                          placeholder="Sua senha pessoal"
-                          className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
-                        />
-                      </div>
                     </div>
                   </div>
 
@@ -422,11 +530,14 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     </span>
                   </div>
 
-                  {/* Room Settings & Room Password */}
+                  {/* Player Profile Image Picker */}
+                  {renderProfileAvatarPicker()}
+
+                  {/* Room Settings & Room Password with Eye Toggle */}
                   <div className="p-4 rounded-xl bg-zinc-950 border border-red-900/50 space-y-4">
                     <div className="text-xs font-semibold text-red-500 flex items-center gap-1.5">
                       <KeyRound className="w-4 h-4" />
-                      <span>Configuração e Senha da Sala do Host</span>
+                      <span>Configuração e Senha da Sala</span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -462,15 +573,34 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
 
                     <div>
                       <label className="block text-xs font-semibold text-red-400 mb-1">
-                        Senha da Sala (Exigida para os outros jogadores entrarem)
+                        Senha da Sala (Para os outros jogadores entrarem)
                       </label>
-                      <input
-                        type="password"
-                        value={roomPassword}
-                        onChange={(e) => setRoomPassword(e.target.value)}
-                        placeholder="Crie a senha da sala (ex: mesa123)"
-                        className="w-full px-3.5 py-2.5 bg-black border border-red-600/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
-                      />
+                      <div className="relative">
+                        <Lock className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type={showHostRoomPassword ? 'text' : 'password'}
+                          value={roomPassword}
+                          onChange={(e) => setRoomPassword(e.target.value)}
+                          placeholder="Crie a senha da sala (ex: mesa123)"
+                          className="w-full pl-10 pr-11 py-2.5 bg-black border border-red-600/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowHostRoomPassword((prev) => !prev)}
+                          title={
+                            showHostRoomPassword
+                              ? 'Ocultar senha da sala'
+                              : 'Mostrar senha da sala'
+                          }
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
+                        >
+                          {showHostRoomPassword ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -491,18 +621,35 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     className="w-full py-3 px-5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Crown className="w-4 h-4" />
-                    <span>Autenticar Host e Criar Sala com Senha</span>
+                    <span>Criar Nickname do Host e Abrir Sala</span>
                   </button>
                 </form>
               ) : (
                 <form onSubmit={handlePlayerJoinSubmit} className="space-y-5">
-                  <div className="border-b border-zinc-800 pb-3">
+                  <div className="border-b border-zinc-800 pb-3 space-y-2">
                     <h2 className="text-lg font-bold text-white font-display">
-                      Cadastro de Jogador e Entrada na Sala do Host
+                      Entrar na Sala do Host
                     </h2>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      Crie seu usuário único e informe a <strong>Senha da Sala</strong> definida pelo Host para entrar na mesa.
-                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-zinc-300">
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          1
+                        </span>
+                        <span>Digite seu <strong>@nickname</strong></span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          2
+                        </span>
+                        <span>Escolha seu <strong>Avatar</strong></span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-zinc-950 border border-zinc-800/80 flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 font-bold text-[11px] flex items-center justify-center shrink-0">
+                          3
+                        </span>
+                        <span>Use a <strong>Senha do Host</strong></span>
+                      </div>
+                    </div>
                   </div>
 
                   {!session && (
@@ -513,42 +660,30 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                       <button
                         type="button"
                         onClick={() => setGateMode('HOST_CREATE')}
-                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold whitespace-nowrap"
+                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-bold whitespace-nowrap cursor-pointer"
                       >
                         Ir para Host
                       </button>
                     </div>
                   )}
 
-                  {/* Player User Registration / Login */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                        Seu Username Único (Novo ou Existente)
-                      </label>
+                  {/* Player Nickname Only (No personal password) */}
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1.5">
+                      Seu Nickname
+                    </label>
+                    <div className="relative">
+                      <span className="text-red-500 font-mono-tabular font-bold text-sm absolute left-3.5 top-1/2 -translate-y-1/2">
+                        @
+                      </span>
                       <input
                         type="text"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
+                        value={username.replace(/^@+/, '')}
+                        onChange={(e) => setUsername(e.target.value.replace(/^@+/, ''))}
                         maxLength={20}
-                        placeholder="ex: lucas_sniper"
-                        className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
+                        placeholder="lucas_sniper"
+                        className="w-full pl-8 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-zinc-300 mb-1.5">
-                        Sua Senha Pessoal de Usuário
-                      </label>
-                      <div className="relative">
-                        <Lock className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="password"
-                          value={userPassword}
-                          onChange={(e) => setUserPassword(e.target.value)}
-                          placeholder="Crie sua senha pessoal"
-                          className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
-                        />
-                      </div>
                     </div>
                   </div>
 
@@ -573,11 +708,14 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     </span>
                   </div>
 
-                  {/* Host Room Code & Password Verification */}
+                  {/* Player Profile Image Picker */}
+                  {renderProfileAvatarPicker()}
+
+                  {/* Host Room Code & Password Verification with Eye Icon */}
                   <div className="p-4 rounded-xl bg-zinc-950 border border-red-900/50 space-y-4">
                     <div className="text-xs font-semibold text-red-500 flex items-center gap-1.5">
                       <DoorOpen className="w-4 h-4" />
-                      <span>Credenciais da Sala do Host</span>
+                      <span>Acesso à Sala do Host</span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -598,15 +736,36 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-red-400 mb-1">
-                          Senha da Sala (Criada pelo Host)
+                          Senha da Sala (Fornecida pelo Host)
                         </label>
-                        <input
-                          type="password"
-                          value={joinRoomPassword}
-                          onChange={(e) => setJoinRoomPassword(e.target.value)}
-                          placeholder="Digite a senha da sala"
-                          className="w-full px-3.5 py-2 bg-black border border-red-600/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
-                        />
+                        <div className="relative">
+                          <Lock className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            type={showJoinRoomPassword ? 'text' : 'password'}
+                            value={joinRoomPassword}
+                            onChange={(e) => setJoinRoomPassword(e.target.value)}
+                            placeholder="Digite a senha da sala"
+                            className="w-full pl-10 pr-11 py-2 bg-black border border-red-600/50 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-red-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setShowJoinRoomPassword((prev) => !prev)
+                            }
+                            title={
+                              showJoinRoomPassword
+                                ? 'Ocultar senha da sala'
+                                : 'Mostrar senha da sala'
+                            }
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
+                          >
+                            {showJoinRoomPassword ? (
+                              <EyeOff className="w-4 h-4" />
+                            ) : (
+                              <Eye className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -629,7 +788,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     className="w-full py-3 px-5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-bold text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <UserPlus className="w-4 h-4" />
-                    <span>Criar Usuário e Entrar na Sala do Host</span>
+                    <span>Entrar na Sala do Host</span>
                   </button>
                 </form>
               )}
@@ -662,7 +821,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     Nenhuma Sala Ativa no Momento
                   </p>
                   <p className="text-xs text-zinc-500 max-w-xs mx-auto">
-                    O jogador Host deve preencher o formulário ao lado para criar a sala e definir a senha de acesso.
+                    O jogador Host deve criar seu nickname e definir a senha da sala no formulário ao lado.
                   </p>
                 </div>
               ) : (
@@ -682,14 +841,14 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                       <span className="text-zinc-400">Proteção da Sala:</span>
                       <span className="text-emerald-400 flex items-center gap-1">
                         <ShieldCheck className="w-3.5 h-3.5" />
-                        Senha Ativa (Hash Verificado)
+                        Senha da Sala Ativa
                       </span>
                     </div>
                   </div>
 
                   <div className="space-y-2">
                     <div className="text-xs font-semibold text-zinc-300 flex items-center justify-between">
-                      <span>Jogadores Autenticados na Sala ({session.joined_players.length})</span>
+                      <span>Jogadores na Sala ({session.joined_players.length})</span>
                     </div>
 
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
@@ -703,9 +862,17 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                             className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2"
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
-                              <span className="w-6 h-6 rounded-full bg-zinc-900 border border-red-900/50 text-xs font-mono-tabular font-bold text-red-500 flex items-center justify-center shrink-0">
-                                {idx + 1}
-                              </span>
+                              {p.avatar_url ? (
+                                <img
+                                  src={p.avatar_url}
+                                  alt={p.username}
+                                  className="w-8 h-8 rounded-full object-cover object-top border border-red-500/60 shrink-0"
+                                />
+                              ) : (
+                                <span className="w-8 h-8 rounded-full bg-zinc-900 border border-red-900/50 text-xs font-mono-tabular font-bold text-red-500 flex items-center justify-center shrink-0">
+                                  {idx + 1}
+                                </span>
+                              )}
                               <div className="min-w-0">
                                 <div className="text-sm font-bold text-white flex items-center gap-1.5 truncate">
                                   <span>@{p.username}</span>
@@ -791,7 +958,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
               </div>
             </div>
 
-            {/* Joined Players Selector Buttons */}
+            {/* Joined Players Selector Buttons with Profile Avatars */}
             <div className="space-y-2">
               <span className="text-xs font-semibold text-zinc-300 block">
                 Escolhendo personagem para o jogador:
@@ -806,12 +973,19 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                       key={player.user_id}
                       type="button"
                       onClick={() => setSelectedPlayerForPick(player.username)}
-                      className={`px-3.5 py-2 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
                         isActivePicker
                           ? 'bg-red-600 text-white border-red-500'
                           : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
                       }`}
                     >
+                      {player.avatar_url && (
+                        <img
+                          src={player.avatar_url}
+                          alt={player.username}
+                          className="w-5 h-5 rounded-full object-cover object-top border border-white/30"
+                        />
+                      )}
                       <span>@{player.username}</span>
                       {player.is_host && (
                         <span className="text-[10px] opacity-80">(Host)</span>
@@ -833,6 +1007,9 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     const char =
                       CHARACTERS_CATALOG.find((c) => c.id === surv.character_id) ||
                       CHARACTERS_CATALOG[0];
+                    const ownerPlayer = session.joined_players.find(
+                      (p) => p.username.toLowerCase() === surv.username.toLowerCase()
+                    );
                     return (
                       <div
                         key={surv.id}
@@ -848,8 +1025,15 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                             <div className="text-xs font-bold text-white truncate">
                               {idx + 1}. {char.name}
                             </div>
-                            <div className="text-[10px] text-red-400 truncate">
-                              @{surv.username}
+                            <div className="text-[10px] text-red-400 truncate flex items-center gap-1">
+                              {ownerPlayer?.avatar_url && (
+                                <img
+                                  src={ownerPlayer.avatar_url}
+                                  alt={surv.username}
+                                  className="w-3.5 h-3.5 rounded-full object-cover inline-block"
+                                />
+                              )}
+                              <span>@{surv.username}</span>
                             </div>
                           </div>
                         </div>
