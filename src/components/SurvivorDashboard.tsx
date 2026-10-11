@@ -43,6 +43,7 @@ import {
   UserMinus,
   AlertTriangle,
   RefreshCw,
+  LogOut,
 } from 'lucide-react';
 
 interface SurvivorDashboardProps {
@@ -62,10 +63,11 @@ interface SurvivorDashboardProps {
   onHostAbandonRoom: () => Promise<void>;
   onPlayerAbandonMatch: (
     survivorId: string,
-    mode: 'MARK_DEAD' | 'REASSIGN',
+    mode: 'MARK_DEAD' | 'REASSIGN' | 'DISCONNECT',
     targetUsername?: string,
     returnToLogin?: boolean
   ) => void;
+  onEmergencyExit?: () => void;
   onAdjustXP: (survivorId: string, delta: number) => void;
   onAdjustWound: (survivorId: string, delta: 1 | -1) => void;
   onSpendAction: (survivorId: string) => void;
@@ -100,6 +102,7 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
   onSaveMatchToHistory,
   onHostAbandonRoom,
   onPlayerAbandonMatch,
+  onEmergencyExit,
   onAdjustXP,
   onAdjustWound,
   onSpendAction,
@@ -2167,8 +2170,17 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!playerAbandonSurvivorId) return;
-                  onPlayerAbandonMatch(playerAbandonSurvivorId, 'MARK_DEAD', undefined, true);
+                  const targetId =
+                    playerAbandonSurvivorId ||
+                    session.survivors.find(
+                      (s) =>
+                        currentUser &&
+                        s.username.toLowerCase() === currentUser.username.toLowerCase()
+                    )?.id ||
+                    viewedSurvivor?.id ||
+                    session.survivors[0]?.id ||
+                    '';
+                  onPlayerAbandonMatch(targetId, 'MARK_DEAD', undefined, true);
                   setShowPlayerAbandonModal(false);
                 }}
                 className="w-full py-2.5 px-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
@@ -2226,9 +2238,18 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (!playerAbandonSurvivorId) return;
+                  const targetId =
+                    playerAbandonSurvivorId ||
+                    session.survivors.find(
+                      (s) =>
+                        currentUser &&
+                        s.username.toLowerCase() === currentUser.username.toLowerCase()
+                    )?.id ||
+                    viewedSurvivor?.id ||
+                    session.survivors[0]?.id ||
+                    '';
                   const target = (playerReassignTarget || session.host_username || 'host').trim();
-                  onPlayerAbandonMatch(playerAbandonSurvivorId, 'REASSIGN', target, true);
+                  onPlayerAbandonMatch(targetId, 'REASSIGN', target, true);
                   setShowPlayerAbandonModal(false);
                 }}
                 className="w-full py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
@@ -2238,11 +2259,55 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
               </button>
             </div>
 
-            <div className="pt-1 flex justify-end">
+            {/* Opção 3: Sair Imediatamente / Desconectar */}
+            <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2">
+              <div className="flex items-center gap-2 text-zinc-300 font-bold text-xs sm:text-sm">
+                <LogOut className="w-4 h-4 text-zinc-400" />
+                <span>Opção 3 — Sair da Sala Agora (Desconectar) 🚪</span>
+              </div>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Desconecta este dispositivo e retorna diretamente para a tela de Login sem modificar o estado dos personagens na mesa.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId =
+                    playerAbandonSurvivorId ||
+                    session.survivors.find(
+                      (s) =>
+                        currentUser &&
+                        s.username.toLowerCase() === currentUser.username.toLowerCase()
+                    )?.id ||
+                    '';
+                  onPlayerAbandonMatch(targetId, 'DISCONNECT', undefined, true);
+                  setShowPlayerAbandonModal(false);
+                }}
+                className="w-full py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sair da Sala e Voltar para o Início</span>
+              </button>
+            </div>
+
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-zinc-800/80">
+              <button
+                type="button"
+                onClick={() => {
+                  if (onEmergencyExit) {
+                    onEmergencyExit();
+                  } else {
+                    onPlayerAbandonMatch('', 'DISCONNECT', undefined, true);
+                  }
+                  setShowPlayerAbandonModal(false);
+                }}
+                className="text-xs text-red-400 hover:text-red-300 font-semibold underline cursor-pointer"
+              >
+                Não consegue sair? Forçar Saída Imediata
+              </button>
               <button
                 type="button"
                 onClick={() => setShowPlayerAbandonModal(false)}
-                className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-bold text-zinc-300 cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-bold text-zinc-300 cursor-pointer text-center"
               >
                 Cancelar / Continuar Jogando
               </button>

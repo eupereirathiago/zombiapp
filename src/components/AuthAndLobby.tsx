@@ -32,6 +32,7 @@ import {
   EyeOff,
   Camera,
   Upload,
+  LogOut,
 } from 'lucide-react';
 
 interface AuthAndLobbyProps {
@@ -72,6 +73,7 @@ interface AuthAndLobbyProps {
     passwordPlain: string
   ) => Promise<{ success: boolean; message: string }>;
   onDeleteMatchRecord: (matchId: string) => Promise<void>;
+  onLeaveRoom?: () => void;
 }
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
@@ -106,6 +108,7 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   matchHistory,
   onLoadMatchWithPassword,
   onDeleteMatchRecord,
+  onLeaveRoom,
 }) => {
   const [wizardStep, setWizardStep] = useState<WizardStep>(
     session ? 'STEP_2_CHARACTER_SELECT' : 'STEP_1_ROOM_GATE'
@@ -925,14 +928,27 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setWizardStep('STEP_2_CHARACTER_SELECT')}
-                    className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <span>Avançar para Escolha de Personagens</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
+                  <div className="space-y-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setWizardStep('STEP_2_CHARACTER_SELECT')}
+                      className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                    >
+                      <span>Avançar para Escolha de Personagens</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+
+                    {onLeaveRoom && (
+                      <button
+                        type="button"
+                        onClick={onLeaveRoom}
+                        className="w-full py-2.5 px-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-red-950/40 hover:border-red-800/50 text-xs font-bold text-zinc-300 hover:text-red-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5 text-red-400" />
+                        <span>Sair desta Sala / Desconectar</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -969,6 +985,18 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
+                  {onLeaveRoom && (
+                    <button
+                      type="button"
+                      onClick={onLeaveRoom}
+                      className="px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-red-950/40 hover:border-red-800/50 text-xs font-semibold text-zinc-300 hover:text-red-300 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                      title="Sair desta sala e voltar para o login"
+                    >
+                      <LogOut className="w-3.5 h-3.5 text-red-400" />
+                      <span>Sair da Sala</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => {

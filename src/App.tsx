@@ -277,6 +277,22 @@ export default function App() {
         if (!res.ok) return;
         const data = await res.json();
         if (data && 'session' in data) {
+          const exitedCode = localStorage.getItem('zombiapp_exited_room_code');
+          if (
+            data.session &&
+            exitedCode &&
+            String(data.session.room_code || '').toUpperCase() === exitedCode.toUpperCase()
+          ) {
+            // User intentionally abandoned/exited this room on this device
+            setSession((prev) => {
+              if (prev && String(prev.room_code || '').toUpperCase() === exitedCode.toUpperCase()) {
+                return null;
+              }
+              return prev;
+            });
+            return;
+          }
+
           setSession((prev) => {
             const prevJson = prev ? JSON.stringify(prev) : 'null';
             const nextJson = data.session ? JSON.stringify(data.session) : 'null';
@@ -448,6 +464,7 @@ export default function App() {
       ],
     };
 
+    localStorage.removeItem('zombiapp_exited_room_code');
     soundFX.playLevelUp();
     setSession(newSession);
     return {
@@ -498,6 +515,7 @@ export default function App() {
       };
     }
 
+    localStorage.removeItem('zombiapp_exited_room_code');
     const joiningUser = authRes.user;
     soundFX.playLevelUp();
 
@@ -638,7 +656,12 @@ export default function App() {
 
   const handleResetSessionToLogin = () => {
     soundFX.playClick();
+    if (session?.room_code) {
+      localStorage.setItem('zombiapp_exited_room_code', session.room_code.toUpperCase());
+    }
+    localStorage.removeItem(STORAGE_KEY_SESSION);
     setSession(null);
+    setViewedSurvivorId('');
     setActiveTab('LOBBY');
   };
 
@@ -801,16 +824,30 @@ export default function App() {
     setActiveTab('LOBBY');
   };
 
-  // Player Abandons Match -> Their character is either marked as DEAD or REASSUMED by another player
+  // Player Abandons Match -> Their character is either marked as DEAD or REASSUMED by another player, or player disconnects
   const handlePlayerAbandonMatch = (
     survivorId: string,
-    mode: 'MARK_DEAD' | 'REASSIGN',
+    mode: 'MARK_DEAD' | 'REASSIGN' | 'DISCONNECT',
     targetUsername?: string,
-    returnToLogin: boolean = false
+    returnToLogin: boolean = true
   ) => {
-    if (!session) return;
-    const woundItem = ITEMS_DATABASE.find((i) => i.id === 'eq_wound')!;
+    if (!session) {
+      localStorage.removeItem(STORAGE_KEY_SESSION);
+      setSession(null);
+      setActiveTab('LOBBY');
+      return;
+    }
 
+    const currentRoomCode = session.room_code;
+    const leavingUser = (currentUser?.username || '').trim().replace(/^@+/, '');
+
+    // Record that this client intentionally left this room
+    if (currentRoomCode) {
+      localStorage.setItem('zombiapp_exited_room_code', currentRoomCode.toUpperCase());
+    }
+    localStorage.removeItem(STORAGE_KEY_SESSION);
+
+    const woundItem = ITEMS_DATABASE.find((i) => i.id === 'eq_wound')!;
     if (mode === 'MARK_DEAD') {
       soundFX.playWound();
     } else {
@@ -818,7 +855,7 @@ export default function App() {
     }
 
     setSession((prev) => {
-      if (!prev) return prev;
+      if (!prev) return null;
       let logMsg = '';
       const nextSurvivors = prev.survivors.map((surv) => {
         if (surv.id !== survivorId) return surv;
@@ -841,37 +878,91 @@ export default function App() {
           };
         }
 
-        const newOwner = (targetUsername || prev.host_username).trim().replace(/^@+/, '');
-        logMsg = `🔄 O jogador @${surv.username} deixou a partida! Seu personagem ${char.name} foi reassumido por @${newOwner}.`;
-        return {
-          ...surv,
-          username: newOwner,
-          user_id: `usr_${newOwner.toLowerCase()}`,
-        };
+        if (mode === 'REASSIGN') {
+          const newOwner = (targetUsername || prev.host_username).trim().replace(/^@+/, '');
+          logMsg = `🔄 O jogador @${surv.username} deixou a partida! Seu personagem ${char.name} foi reassumido por @${newOwner}.`;
+          return {
+            ...surv,
+            username: newOwner,
+            user_id: `usr_${newOwner.toLowerCase()}`,
+          };
+        }
+
+        return surv;
       });
+
+      if (mode === 'DISCONNECT' && !logMsg) {
+        logMsg = `🚪 O jogador @${leavingUser || 'desconhecido'} saiu da partida.`;
+      }
+
+      // Filter out this leaving user from joined_players
+      const nextJoined = prev.joined_players.filter(
+        (p) => !leavingUser || p.username.toLowerCase() !== leavingUser.toLowerCase()
+      );
 
       const updatedSession: GameSession = {
         ...prev,
+        joined_players: nextJoined,
         survivors: nextSurvivors,
         combat_log: logMsg ? appendLog(prev, logMsg, 'WOUND') : prev.combat_log,
       };
 
-      if (returnToLogin) {
-        fetch('/api/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session: updatedSession }),
-        }).catch(() => {});
+      fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session: updatedSession }),
+      }).catch(() => {});
 
-        setTimeout(() => {
-          setSession(null);
-          setViewedSurvivorId('');
-          setActiveTab('LOBBY');
-        }, 120);
+      if (returnToLogin) {
+        return null;
       }
 
       return updatedSession;
     });
+
+    if (returnToLogin) {
+      setSession(null);
+      setViewedSurvivorId('');
+      setActiveTab('LOBBY');
+    }
+
+    fetch('/api/session/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomCode: currentRoomCode,
+        username: leavingUser,
+        survivorId,
+        mode,
+        targetUsername,
+      }),
+    }).catch(() => {});
+  };
+
+  // Player leaves room from lobby or anytime
+  const handlePlayerLeaveRoom = () => {
+    soundFX.playClick();
+    if (session?.room_code) {
+      localStorage.setItem('zombiapp_exited_room_code', session.room_code.toUpperCase());
+    }
+    localStorage.removeItem(STORAGE_KEY_SESSION);
+
+    const leavingUser = (currentUser?.username || '').trim().replace(/^@+/, '');
+    if (session?.room_code && leavingUser) {
+      fetch('/api/session/leave', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomCode: session.room_code,
+          username: leavingUser,
+          mode: 'DISCONNECT',
+        }),
+      }).catch(() => {});
+    }
+
+    setSession(null);
+    setViewedSurvivorId('');
+    setActiveTab('LOBBY');
   };
 
   // Host enters a saved room from the Match History and types the room password to load the saved match
@@ -904,6 +995,7 @@ export default function App() {
       }
 
       const loadedSession: GameSession = data.session;
+      localStorage.removeItem('zombiapp_exited_room_code');
       soundFX.playLevelUp();
 
       // Authenticate the device as the Host of the restored room
@@ -1828,28 +1920,33 @@ export default function App() {
               )}
             </button>
 
-            {session && session.status === 'IN_PROGRESS' && !isCurrentUserHost && (
+            {session && (
               <button
                 type="button"
                 onClick={() => {
-                  setActiveTab('DASHBOARD');
-                  setTriggerPlayerAbandonModal(true);
+                  if (isCurrentUserHost) {
+                    setActiveTab('DASHBOARD');
+                  } else {
+                    setActiveTab('DASHBOARD');
+                    setTriggerPlayerAbandonModal(true);
+                  }
                 }}
-                className="hidden sm:flex px-3.5 py-2 text-xs font-semibold text-red-300 bg-zinc-950 border border-red-800/60 rounded-lg hover:bg-red-950/60 transition-colors items-center gap-1.5 whitespace-nowrap cursor-pointer"
-                title="Abandonar a partida a qualquer momento"
+                className="flex px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-red-300 bg-red-950/40 border border-red-800/60 rounded-lg hover:bg-red-900/60 transition-colors items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-sm"
+                title="Abandonar ou sair da partida a qualquer momento"
               >
-                <UserMinus className="w-3.5 h-3.5 text-red-400" />
-                <span>Abandonar Partida</span>
+                <UserMinus className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <span className="hidden xs:inline">Abandonar</span>
               </button>
             )}
 
             <button
               type="button"
-              onClick={handleResetSessionToLogin}
-              className="hidden sm:flex px-3.5 py-2 text-xs font-semibold text-zinc-200 bg-zinc-950 border border-zinc-800 rounded-lg hover:bg-zinc-900 hover:border-red-900/60 transition-colors items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              onClick={handlePlayerLeaveRoom}
+              className="flex px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-xs font-semibold text-zinc-300 bg-zinc-950 border border-zinc-800 rounded-lg hover:bg-zinc-900 hover:border-zinc-700 transition-colors items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              title="Sair da sala e voltar ao login"
             >
-              <RotateCcw className="w-3.5 h-3.5 text-red-500" />
-              <span>Nova Sala</span>
+              <RotateCcw className="w-3.5 h-3.5 text-red-500 shrink-0" />
+              <span className="hidden sm:inline">Nova Sala</span>
             </button>
 
             {/* Mobile Hamburger Button (Three Lines) */}
@@ -1871,12 +1968,16 @@ export default function App() {
         {/* Mobile Dropdown Navigation Drawer */}
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-red-950/70 bg-black px-4 py-3 space-y-1">
-            {session && session.status === 'IN_PROGRESS' && !isCurrentUserHost && (
+            {session && (
               <button
                 type="button"
                 onClick={() => {
-                  setActiveTab('DASHBOARD');
-                  setTriggerPlayerAbandonModal(true);
+                  if (isCurrentUserHost) {
+                    setActiveTab('DASHBOARD');
+                  } else {
+                    setActiveTab('DASHBOARD');
+                    setTriggerPlayerAbandonModal(true);
+                  }
                   setMobileMenuOpen(false);
                 }}
                 className="w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-semibold transition-colors flex items-center justify-between text-red-300 bg-red-950/30 border border-red-800/40 hover:bg-red-950/60 cursor-pointer"
@@ -1995,6 +2096,7 @@ export default function App() {
             matchHistory={matchHistory}
             onLoadMatchWithPassword={handleLoadMatchWithPassword}
             onDeleteMatchRecord={handleDeleteMatchRecord}
+            onLeaveRoom={handlePlayerLeaveRoom}
           />
         )}
 
@@ -2021,6 +2123,7 @@ export default function App() {
               onSaveMatchToHistory={handleSaveMatchToHistory}
               onHostAbandonRoom={handleHostAbandonRoom}
               onPlayerAbandonMatch={handlePlayerAbandonMatch}
+              onEmergencyExit={handlePlayerLeaveRoom}
               onAdjustXP={handleAdjustXP}
               onAdjustWound={handleAdjustWound}
               onSpendAction={handleSpendAction}

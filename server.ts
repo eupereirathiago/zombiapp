@@ -271,6 +271,53 @@ ${recentLogs || 'Partida concluída na mesa.'}`;
     });
   });
 
+  // Player leaves or abandons room without disbanding the entire room
+  app.post('/api/session/leave', (req, res) => {
+    const { roomCode, username, survivorId, mode, targetUsername } = req.body || {};
+    const code = roomCode ? String(roomCode).trim().toUpperCase() : latestRoomCode;
+    if (code && roomsByCode.has(code)) {
+      const entry = roomsByCode.get(code)!;
+      let session = entry.session;
+      if (session) {
+        const cleanUser = username ? String(username).toLowerCase().replace(/^@+/, '') : '';
+        const joined_players = (session.joined_players || []).filter(
+          (p: any) => String(p.username).toLowerCase().replace(/^@+/, '') !== cleanUser
+        );
+        let survivors = session.survivors || [];
+        if (survivorId) {
+          survivors = survivors.map((s: any) => {
+            if (s.id !== survivorId) return s;
+            if (mode === 'MARK_DEAD') {
+              return {
+                ...s,
+                health: s.max_health || 3,
+                actions_left: 0,
+                moves_left: 0,
+              };
+            }
+            if (mode === 'REASSIGN') {
+              const newOwner = (targetUsername || session.host_username || 'host').replace(/^@+/, '');
+              return {
+                ...s,
+                username: newOwner,
+                user_id: `usr_${newOwner.toLowerCase()}`,
+              };
+            }
+            return s;
+          });
+        }
+        session = {
+          ...session,
+          joined_players,
+          survivors,
+        };
+        roomsByCode.set(code, { session, updatedAt: Date.now() });
+        persistAllToDisk();
+      }
+    }
+    res.json({ ok: true, message: 'Jogador saiu da sala com sucesso.' });
+  });
+
   // Save or update a match in the database history (PAUSADO, CONCLUIDO, ENCERRADO)
   app.post('/api/matches/save', async (req, res) => {
     const { session, historyStatus, aiSummary } = req.body;
