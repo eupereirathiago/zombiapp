@@ -2177,6 +2177,7 @@ export default function App() {
             onSaveMatchToHistory={handleSaveMatchToHistory}
             onImportFullSession={handleImportFullSession}
             onBackToDashboard={() => setActiveTab('DASHBOARD')}
+            onEmergencyExit={handlePlayerLeaveRoom}
           />
         )}
 

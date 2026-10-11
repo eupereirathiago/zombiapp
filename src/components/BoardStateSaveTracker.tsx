@@ -30,6 +30,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  LogOut,
 } from 'lucide-react';
 
 interface BoardStateSaveTrackerProps {
@@ -44,6 +45,7 @@ interface BoardStateSaveTrackerProps {
   ) => Promise<void>;
   onImportFullSession: (importedSession: GameSession) => void;
   onBackToDashboard?: () => void;
+  onEmergencyExit?: () => void;
 }
 
 const MARKER_CONFIG: Record<
@@ -211,6 +213,7 @@ export const BoardStateSaveTracker: React.FC<BoardStateSaveTrackerProps> = ({
   onSaveMatchToHistory,
   onImportFullSession,
   onBackToDashboard,
+  onEmergencyExit,
 }) => {
   const activeUsername = currentUser?.username || session?.host_username || 'Host';
   const boardSave = createDefaultBoardSave(session, activeUsername);
@@ -535,7 +538,17 @@ export const BoardStateSaveTracker: React.FC<BoardStateSaveTrackerProps> = ({
                   onClick={onBackToDashboard}
                   className="px-3 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-[11px] font-bold transition-colors cursor-pointer"
                 >
-                  ← Voltar para o Dashboard do Host
+                  ← Voltar para o Dashboard
+                </button>
+              )}
+              {onEmergencyExit && (
+                <button
+                  type="button"
+                  onClick={onEmergencyExit}
+                  className="px-3 py-1 rounded-md bg-zinc-900 hover:bg-red-950/60 border border-red-800/60 text-red-300 text-[11px] font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <LogOut className="w-3 h-3 text-red-400" />
+                  <span>Sair da Sala / Login</span>
                 </button>
               )}
             </div>
