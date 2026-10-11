@@ -7,6 +7,7 @@ import {
 import { ItemCategory, ZombicideEdition } from '../types/game';
 import { CharacterAvatar } from './CharacterAvatar';
 import { CardArtPreview } from './CardArtPreview';
+import { SurvivorIdCard } from './SurvivorIdCard';
 import {
   Search,
   Volume2,
@@ -229,45 +230,22 @@ export const CatalogExplorer: React.FC = () => {
         </div>
       </div>
 
-      {/* Complete Character Skill Reference Table */}
-      <div className="p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-4 overflow-x-auto">
-        <h2 className="text-xl font-bold text-white font-display">
-          Mapeamento de Sobreviventes e Habilidades por Nível
-        </h2>
-        <table className="w-full text-left border-collapse text-xs sm:text-sm">
-          <thead>
-            <tr className="border-b border-zinc-800 text-zinc-400">
-              <th className="py-3 px-4 font-semibold">Personagem</th>
-              <th className="py-3 px-4 font-semibold text-sky-400">Nível Azul (0 XP)</th>
-              <th className="py-3 px-4 font-semibold text-yellow-400">Nível Amarelo (7 XP)</th>
-              <th className="py-3 px-4 font-semibold text-orange-400">Nível Laranja (19 XP · Escolha 1)</th>
-              <th className="py-3 px-4 font-semibold text-red-500">Nível Vermelho (43 XP · Escolha 1)</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-800/80">
-            {CHARACTERS_CATALOG.map((char) => (
-              <tr key={char.id} className="hover:bg-zinc-900/50">
-                <td className="py-3.5 px-4 font-bold text-white">
-                  <div className="flex items-center gap-3">
-                    <CharacterAvatar character={char} variant="circle" size="sm" />
-                    <div>
-                      <div>{char.name}</div>
-                      <div className="text-xs font-normal text-zinc-400">{char.title}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="py-3.5 px-4 text-zinc-200">{char.skills.blue.name}</td>
-                <td className="py-3.5 px-4 text-zinc-200">{char.skills.yellow.name}</td>
-                <td className="py-3.5 px-4 text-zinc-300">
-                  {char.skills.orange.map((s) => s.name).join(' · ')}
-                </td>
-                <td className="py-3.5 px-4 text-zinc-300">
-                  {char.skills.red.map((s) => s.name).join(' · ')}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Complete Character ID Cards Grid */}
+      <div className="space-y-4">
+        <div className="p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-1">
+          <h2 className="text-xl font-bold text-white font-display">
+            Fichas Completas de Sobreviventes ({CHARACTERS_CATALOG.length} Personagens)
+          </h2>
+          <p className="text-xs text-zinc-400">
+            Todas as fichas de sobreviventes — incluindo a coleção Fandom (Mistério S/A) e todas as edições oficiais — no layout de carta de identificação do Zombicide.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          {CHARACTERS_CATALOG.map((char) => (
+            <SurvivorIdCard key={char.id} character={char} />
+          ))}
+        </div>
       </div>
     </div>
   );

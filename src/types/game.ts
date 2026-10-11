@@ -1,6 +1,7 @@
 export type DangerLevel = 'BLUE' | 'YELLOW' | 'ORANGE' | 'RED';
 
 export type ZombicideEdition =
+  | 'Fandom'
   | '2nd_Edition'
   | 'Classic_S1'
   | 'Prison_Outbreak'
@@ -50,6 +51,7 @@ export interface GameItem {
 export interface SkillDefinition {
   id: string;
   name: string;
+  originalName?: string;
   description: string;
   effectType:
     | 'EXTRA_ACTION'
@@ -75,10 +77,12 @@ export interface SkillDefinition {
 export interface GameCharacter {
   id: string;
   name: string;
+  originalName?: string;
   title: string;
   edition: string;
   avatar_url: string;
   full_art_url: string;
+  maxHealth?: number; // Default 3 (or 2 for Scrappy-Doo / Scooby-Doo V2)
   startingEquipmentId?: string;
   skills: {
     blue: SkillDefinition;
@@ -126,7 +130,9 @@ export interface UserProfile {
   created_at: string;
 }
 
-export type SessionStatus = 'LOBBY' | 'IN_PROGRESS' | 'FINISHED';
+export type SessionStatus = 'LOBBY' | 'IN_PROGRESS' | 'PAUSED' | 'FINISHED' | 'ENDED';
+
+export type MatchHistoryStatus = 'CONCLUIDO' | 'ENCERRADO' | 'PAUSADO';
 
 export interface JoinedRoomPlayer {
   user_id: string;
@@ -134,6 +140,83 @@ export interface JoinedRoomPlayer {
   avatar_url?: string;
   is_host: boolean;
   joined_at: string;
+}
+
+export type BoardMarkerType =
+  | 'SURVIVOR'
+  | 'WALKER'
+  | 'RUNNER'
+  | 'FATTY'
+  | 'ABOMINATION'
+  | 'SPAWN'
+  | 'OBJECTIVE'
+  | 'NOISE'
+  | 'DOOR_OPEN'
+  | 'DOOR_CLOSED';
+
+export interface BoardPhotoPin {
+  id: string;
+  xPercent: number; // 0 to 100
+  yPercent: number; // 0 to 100
+  type: BoardMarkerType;
+  survivorId?: string;
+  label: string;
+  count: number;
+  note?: string;
+}
+
+export interface BoardZoneEntry {
+  id: string;
+  zoneName: string; // e.g., "Zona A1 - Rua Central"
+  survivorIds: string[];
+  walkers: number;
+  runners: number;
+  fatties: number;
+  abominations: number;
+  noiseTokens: number;
+  hasSpawn: boolean;
+  hasObjective: boolean;
+  doorStatus: 'NONE' | 'CLOSED' | 'OPEN';
+  notes: string;
+}
+
+export interface BoardSaveState {
+  updated_at: string;
+  updated_by: string;
+  round_saved: number;
+  photo_data_url?: string;
+  show_grid_3x3?: boolean; // Optional 3x3 overlay; false = clean photo only
+  use_zone_tracker?: boolean; // Option 2 is optional, only enabled if desired
+  general_notes: string;
+  pins: BoardPhotoPin[];
+  zones: BoardZoneEntry[];
+}
+
+export interface MatchHistoryRecord {
+  id: string;
+  room_code: string;
+  room_name: string;
+  room_password_hash: string;
+  host_username: string;
+  participants?: string[]; // All usernames who participated (Host + Players)
+  history_status: MatchHistoryStatus; // 'CONCLUIDO' | 'ENCERRADO' | 'PAUSADO'
+  saved_at: string;
+  saved_timestamp: number;
+  round: number;
+  ai_summary?: string; // Brief AI-generated or tactical summary of the match upon conclusion
+  survivor_Summary: {
+    id: string;
+    username: string;
+    character_id: string;
+    xp: number;
+    health: number;
+    max_health: number;
+    items_count?: number;
+  }[];
+  has_board_photo: boolean;
+  pins_count: number;
+  zones_count: number;
+  session_snapshot: GameSession;
 }
 
 export interface GameSession {
@@ -144,12 +227,15 @@ export interface GameSession {
   host_user_id: string;
   host_username: string;
   status: SessionStatus;
+  history_status?: MatchHistoryStatus;
+  ai_summary?: string;
   round: number;
   first_player_index: number; // Rotates each round (RF02.4)
   turn_order_index: number; // Position within current round's order (0..N-1 = survivors, N = ZOMBIE_PHASE)
   is_zombie_phase: boolean;
   joined_players: JoinedRoomPlayer[];
   survivors: SurvivorState[];
+  board_save?: BoardSaveState;
   combat_log: {
     id: string;
     timestamp: string;

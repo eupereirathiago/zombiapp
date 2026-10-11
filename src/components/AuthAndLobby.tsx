@@ -1,15 +1,18 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   UserProfile,
   GameSession,
   ZombicideEdition,
+  SkillDefinition,
+  MatchHistoryRecord,
 } from '../types/game';
 import {
   CHARACTERS_CATALOG,
-  ITEMS_DATABASE,
   EDITION_LABELS,
 } from '../data/zombicideCatalog';
 import { CharacterAvatar } from './CharacterAvatar';
+import { SurvivorIdCard } from './SurvivorIdCard';
+import { MatchHistoryPanel } from './MatchHistoryPanel';
 import {
   UserPlus,
   Lock,
@@ -62,6 +65,13 @@ interface AuthAndLobbyProps {
   onAddSurvivorToTable: (username: string, characterId: string) => void;
   onRemoveSurvivorFromTable: (survivorId: string) => void;
   onStartMatch: () => void;
+  matchHistory: MatchHistoryRecord[];
+  onLoadMatchWithPassword: (
+    matchId: string,
+    roomCode: string,
+    passwordPlain: string
+  ) => Promise<{ success: boolean; message: string }>;
+  onDeleteMatchRecord: (matchId: string) => Promise<void>;
 }
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
@@ -93,6 +103,9 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   onAddSurvivorToTable,
   onRemoveSurvivorFromTable,
   onStartMatch,
+  matchHistory,
+  onLoadMatchWithPassword,
+  onDeleteMatchRecord,
 }) => {
   const [wizardStep, setWizardStep] = useState<WizardStep>(
     session ? 'STEP_2_CHARACTER_SELECT' : 'STEP_1_ROOM_GATE'
@@ -100,6 +113,14 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   const [gateMode, setGateMode] = useState<GateMode>(
     session ? 'PLAYER_JOIN' : 'HOST_CREATE'
   );
+
+  // Whenever the active session is closed (after Salvar, Encerrar, or Concluir), return directly to the Login & Room Gate step
+  useEffect(() => {
+    if (!session) {
+      setWizardStep('STEP_1_ROOM_GATE');
+      setGateMode('HOST_CREATE');
+    }
+  }, [session]);
 
   // Nickname & Profile Avatar State (Shared between Host Create & Player Join)
   const [username, setUsername] = useState(currentUser?.username || '');
@@ -132,6 +153,12 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
   );
   const [editionFilter, setEditionFilter] = useState<ZombicideEdition | 'ALL'>('ALL');
   const [charSearch, setCharSearch] = useState('');
+  const [selectedSkillDetail, setSelectedSkillDetail] = useState<{
+    charName: string;
+    tierLabel: string;
+    tierColor: string;
+    skill: SkillDefinition;
+  } | null>(null);
 
   // Handle custom image upload from device for player profile
   const handleCustomAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -404,9 +431,8 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
 
           <button
             type="button"
-            disabled={!session}
             onClick={() => setWizardStep('STEP_2_CHARACTER_SELECT')}
-            className={`px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer disabled:opacity-40 ${
+            className={`px-3 sm:px-4 py-2.5 sm:py-2 rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer ${
               wizardStep === 'STEP_2_CHARACTER_SELECT'
                 ? 'bg-red-600 text-white'
                 : 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white'
@@ -911,157 +937,187 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
               )}
             </div>
           </div>
+
+          {/* Full-Width Database Match History Section in Lobby so Host can enter a saved room & type the room password */}
+          <div className="lg:col-span-12">
+            <MatchHistoryPanel
+              matchHistory={matchHistory}
+              activeSession={session}
+              onLoadMatchWithPassword={onLoadMatchWithPassword}
+              onDeleteMatchRecord={onDeleteMatchRecord}
+            />
+          </div>
         </div>
       )}
 
       {/* =====================================================================
-          CHARACTER SELECTION (ALL EDITIONS OF ZOMBICIDE)
+          CHARACTER SELECTION (ALL EDITIONS OF ZOMBICIDE WITH ID CARD LAYOUT)
          ===================================================================== */}
-      {wizardStep === 'STEP_2_CHARACTER_SELECT' && session && (
+      {wizardStep === 'STEP_2_CHARACTER_SELECT' && (
         <div className="space-y-8">
           {/* Active Squad Bar & Player Selector */}
-          <div className="p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-5">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
-              <div>
-                <h2 className="text-lg font-bold text-white font-display">
-                  Jogadores na Sala #{session.room_code} — Vincular Sobreviventes
-                </h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Selecione qual jogador da sala está escolhendo agora e clique em qualquer personagem do catálogo abaixo.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWizardStep('STEP_1_ROOM_GATE');
-                    setGateMode('PLAYER_JOIN');
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-semibold text-zinc-200 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-                >
-                  <PlusCircle className="w-3.5 h-3.5 text-red-500" />
-                  <span>+ Entrar Outro Jogador com Senha</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={session.survivors.length === 0}
-                  onClick={onStartMatch}
-                  className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
-                >
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>
-                    Iniciar Partida na Mesa ({session.survivors.length} Sobreviventes)
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Joined Players Selector Buttons with Profile Avatars */}
-            <div className="space-y-2">
-              <span className="text-xs font-semibold text-zinc-300 block">
-                Escolhendo personagem para o jogador:
-              </span>
-              <div className="flex flex-wrap items-center gap-2">
-                {session.joined_players.map((player) => {
-                  const isActivePicker =
-                    activePlayerUsername.toLowerCase() ===
-                    player.username.toLowerCase();
-                  return (
-                    <button
-                      key={player.user_id}
-                      type="button"
-                      onClick={() => setSelectedPlayerForPick(player.username)}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                        isActivePicker
-                          ? 'bg-red-600 text-white border-red-500'
-                          : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
-                      }`}
-                    >
-                      {player.avatar_url && (
-                        <img
-                          src={player.avatar_url}
-                          alt={player.username}
-                          className="w-5 h-5 rounded-full object-cover object-top border border-white/30"
-                        />
-                      )}
-                      <span>@{player.username}</span>
-                      {player.is_host && (
-                        <span className="text-[10px] opacity-80">(Host)</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Currently Selected Survivors on Table */}
-            {session.survivors.length > 0 && (
-              <div className="pt-3 border-t border-zinc-800/80">
-                <div className="text-xs font-semibold text-zinc-400 mb-2.5">
-                  Ordem de Iniciativa Atual na Mesa ({session.survivors.length} / 6):
+          {session ? (
+            <div className="p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-white font-display">
+                    Jogadores na Sala #{session.room_code} — Vincular Sobreviventes
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Selecione qual jogador da sala está escolhendo agora e clique em qualquer ficha de personagem abaixo.
+                  </p>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
-                  {session.survivors.map((surv, idx) => {
-                    const char =
-                      CHARACTERS_CATALOG.find((c) => c.id === surv.character_id) ||
-                      CHARACTERS_CATALOG[0];
-                    const ownerPlayer = session.joined_players.find(
-                      (p) => p.username.toLowerCase() === surv.username.toLowerCase()
-                    );
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWizardStep('STEP_1_ROOM_GATE');
+                      setGateMode('PLAYER_JOIN');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-semibold text-zinc-200 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5 text-red-500" />
+                    <span>+ Entrar Outro Jogador com Senha</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={session.survivors.length === 0}
+                    onClick={onStartMatch}
+                    className="px-6 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>
+                      Iniciar Partida na Mesa ({session.survivors.length} Sobreviventes)
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Joined Players Selector Buttons with Profile Avatars */}
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-zinc-300 block">
+                  Escolhendo personagem para o jogador:
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {session.joined_players.map((player) => {
+                    const isActivePicker =
+                      activePlayerUsername.toLowerCase() ===
+                      player.username.toLowerCase();
                     return (
-                      <div
-                        key={surv.id}
-                        className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2"
+                      <button
+                        key={player.user_id}
+                        type="button"
+                        onClick={() => setSelectedPlayerForPick(player.username)}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                          isActivePicker
+                            ? 'bg-red-600 text-white border-red-500'
+                            : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                        }`}
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <CharacterAvatar
-                            character={char}
-                            variant="circle"
-                            size="sm"
+                        {player.avatar_url && (
+                          <img
+                            src={player.avatar_url}
+                            alt={player.username}
+                            className="w-5 h-5 rounded-full object-cover object-top border border-white/30"
                           />
-                          <div className="min-w-0">
-                            <div className="text-xs font-bold text-white truncate">
-                              {idx + 1}. {char.name}
-                            </div>
-                            <div className="text-[10px] text-red-400 truncate flex items-center gap-1">
-                              {ownerPlayer?.avatar_url && (
-                                <img
-                                  src={ownerPlayer.avatar_url}
-                                  alt={surv.username}
-                                  className="w-3.5 h-3.5 rounded-full object-cover inline-block"
-                                />
-                              )}
-                              <span>@{surv.username}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => onRemoveSurvivorFromTable(surv.id)}
-                          className="p-1 text-zinc-500 hover:text-red-400 transition-colors shrink-0"
-                          title="Remover da mesa"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                        )}
+                        <span>@{player.username}</span>
+                        {player.is_host && (
+                          <span className="text-[10px] opacity-80">(Host)</span>
+                        )}
+                      </button>
                     );
                   })}
                 </div>
               </div>
-            )}
-          </div>
 
-          {/* Complete Multi-Edition Character Browser */}
-          <div className="p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-6">
+              {/* Currently Selected Survivors on Table */}
+              {session.survivors.length > 0 && (
+                <div className="pt-3 border-t border-zinc-800/80">
+                  <div className="text-xs font-semibold text-zinc-400 mb-2.5">
+                    Ordem de Iniciativa Atual na Mesa ({session.survivors.length} / 6):
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                    {session.survivors.map((surv, idx) => {
+                      const char =
+                        CHARACTERS_CATALOG.find((c) => c.id === surv.character_id) ||
+                        CHARACTERS_CATALOG[0];
+                      const ownerPlayer = session.joined_players.find(
+                        (p) => p.username.toLowerCase() === surv.username.toLowerCase()
+                      );
+                      return (
+                        <div
+                          key={surv.id}
+                          className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <CharacterAvatar
+                              character={char}
+                              variant="circle"
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold text-white truncate">
+                                {idx + 1}. {char.name}
+                              </div>
+                              <div className="text-[10px] text-red-400 truncate flex items-center gap-1">
+                                {ownerPlayer?.avatar_url && (
+                                  <img
+                                    src={ownerPlayer.avatar_url}
+                                    alt={surv.username}
+                                    className="w-3.5 h-3.5 rounded-full object-cover inline-block"
+                                  />
+                                )}
+                                <span>@{surv.username}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveSurvivorFromTable(surv.id)}
+                            className="p-1 text-zinc-500 hover:text-red-400 transition-colors shrink-0"
+                            title="Remover da mesa"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-5 rounded-2xl bg-[#0A0A0C]/95 border border-red-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-white font-display">
+                  Escolha seu Sobrevivente ou Crie uma Sala Primeiro
+                </h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Você já pode escolher qualquer personagem abaixo para iniciar na mesa imediatamente, ou voltar em &ldquo;Login e Sala&rdquo; para configurar o código e a senha da sala.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWizardStep('STEP_1_ROOM_GATE')}
+                className="px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-xs font-bold text-white transition-colors shrink-0 cursor-pointer"
+              >
+                Configurar Sala e Senha
+              </button>
+            </div>
+          )}
+
+          {/* Complete Multi-Edition Character Browser with Replicated Zombicide ID Card Layout */}
+          <div className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-6">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h3 className="text-xl font-bold text-white font-display">
-                  Catálogo Completo de Sobreviventes ({filteredCharacters.length} exibidos)
+                  Fichas de Personagens ({filteredCharacters.length} exibidos)
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  Inclui Zombicide 2ª Edição, Clássico S1, Prison Outbreak, Toxic City Mall, Rue Morgue, Angry Neighbors, Black Plague, Wulfsburg, Green Horde, Invader, Dark Side e Undead or Alive.
+                  Filtre por edição — incluindo a aba <strong>Fandom (Mistério S/A)</strong> com habilidades traduzidas — e escolha os sobreviventes da partida.
                 </p>
               </div>
 
@@ -1078,121 +1134,102 @@ export const AuthAndLobby: React.FC<AuthAndLobbyProps> = ({
               </div>
             </div>
 
-            {/* Edition Filter Tabs */}
+            {/* Edition Filter Tabs (Including Fandom Tab!) */}
             <div className="flex items-center gap-1.5 p-1.5 bg-black border border-zinc-800 rounded-xl overflow-x-auto">
               {(Object.keys(EDITION_LABELS) as (ZombicideEdition | 'ALL')[]).map(
-                (edKey) => (
-                  <button
-                    key={edKey}
-                    type="button"
-                    onClick={() => setEditionFilter(edKey)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      editionFilter === edKey
-                        ? 'bg-red-600 text-white font-bold'
-                        : 'text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    {EDITION_LABELS[edKey]}
-                  </button>
-                )
+                (edKey) => {
+                  const count =
+                    edKey === 'ALL'
+                      ? CHARACTERS_CATALOG.length
+                      : CHARACTERS_CATALOG.filter((c) => c.edition === edKey)
+                          .length;
+                  return (
+                    <button
+                      key={edKey}
+                      type="button"
+                      onClick={() => setEditionFilter(edKey)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        editionFilter === edKey
+                          ? 'bg-red-600 text-white font-bold'
+                          : edKey === 'Fandom'
+                          ? 'bg-red-950/40 border border-red-500/40 text-red-300 hover:text-white'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <span>{EDITION_LABELS[edKey]}</span>
+                      <span
+                        className={`text-[10px] font-mono-tabular px-1.5 py-0.5 rounded ${
+                          editionFilter === edKey
+                            ? 'bg-black/30 text-white'
+                            : 'bg-zinc-900 text-zinc-400'
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                }
               )}
             </div>
 
-            {/* Character Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {/* Replicated Zombicide ID Cards Grid for ALL Characters */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {filteredCharacters.map((char) => {
                 const isAlreadyInRoom = assignedCharacterIds.has(char.id);
-                const startItem = ITEMS_DATABASE.find(
-                  (i) => i.id === char.startingEquipmentId
-                );
-
                 return (
-                  <div
+                  <SurvivorIdCard
                     key={char.id}
-                    className={`p-4 rounded-xl border transition-all flex gap-4 ${
-                      isAlreadyInRoom
-                        ? 'bg-red-950/20 border-red-600/60'
-                        : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
-                    }`}
-                  >
-                    <CharacterAvatar
-                      character={char}
-                      variant="portrait"
-                      size="md"
-                      className="shrink-0"
-                    />
-
-                    <div className="flex-1 min-w-0 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between gap-1 text-[11px] text-zinc-400">
-                          <span className="truncate">
-                            {EDITION_LABELS[char.edition as ZombicideEdition] ||
-                              char.edition}
-                          </span>
-                          {isAlreadyInRoom && (
-                            <span className="text-red-500 font-bold shrink-0">
-                              · Na Mesa
-                            </span>
-                          )}
-                        </div>
-
-                        <h4 className="text-lg font-bold text-white font-display leading-snug">
-                          {char.name}
-                        </h4>
-                        <div className="text-xs text-zinc-400">{char.title}</div>
-
-                        {startItem && (
-                          <div className="text-[11px] text-red-400 mt-1">
-                            Equip. Inicial: {startItem.name}
-                          </div>
-                        )}
-
-                        <div className="mt-2.5 space-y-1 text-[11px]">
-                          <div className="text-sky-300">
-                            <span className="font-semibold">Azul:</span>{' '}
-                            {char.skills.blue.name}
-                          </div>
-                          <div className="text-yellow-300">
-                            <span className="font-semibold">Amarelo:</span>{' '}
-                            {char.skills.yellow.name}
-                          </div>
-                          <div className="text-orange-300">
-                            <span className="font-semibold">Laranja:</span>{' '}
-                            {char.skills.orange.map((s) => s.name).join(' / ')}
-                          </div>
-                          <div className="text-rose-300">
-                            <span className="font-semibold">Vermelho:</span>{' '}
-                            {char.skills.red.map((s) => s.name).join(' / ')}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 pt-2.5 border-t border-zinc-800/80 flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-zinc-400 truncate">
-                          Para: <strong className="text-zinc-200">@{activePlayerUsername}</strong>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onAddSurvivorToTable(activePlayerUsername, char.id)
-                          }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
-                            isAlreadyInRoom
-                              ? 'bg-zinc-900 text-red-400 border border-red-800/50 hover:bg-zinc-800'
-                              : 'bg-red-600 hover:bg-red-500 text-white'
-                          }`}
-                        >
-                          {isAlreadyInRoom
-                            ? 'Reatribuir'
-                            : `+ Escolher ${char.name}`}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    character={char}
+                    isAlreadyInRoom={isAlreadyInRoom}
+                    activePlayerUsername={activePlayerUsername || 'host'}
+                    onSelectCharacter={onAddSurvivorToTable}
+                    onInspectSkill={setSelectedSkillDetail}
+                  />
                 );
               })}
             </div>
           </div>
+
+          {/* Skill Detail Modal when clicking any skill bar on a character ID card */}
+          {selectedSkillDetail && (
+            <div
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+              onClick={() => setSelectedSkillDetail(null)}
+            >
+              <div
+                className="max-w-md w-full p-6 rounded-2xl bg-[#0A0A0C] border border-red-600/50 space-y-4 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`text-xs font-mono-tabular font-bold uppercase ${selectedSkillDetail.tierColor}`}
+                  >
+                    {selectedSkillDetail.charName} · {selectedSkillDetail.tierLabel}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-white font-display">
+                    {selectedSkillDetail.skill.name}
+                  </h3>
+                  {selectedSkillDetail.skill.originalName && (
+                    <p className="text-xs font-mono-tabular text-zinc-400 mt-0.5">
+                      Nome original na carta: {selectedSkillDetail.skill.originalName}
+                    </p>
+                  )}
+                </div>
+                <p className="text-sm text-zinc-200 leading-relaxed bg-zinc-950 p-3.5 rounded-xl border border-zinc-800">
+                  {selectedSkillDetail.skill.description}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSkillDetail(null)}
+                  className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Fechar Detalhes
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

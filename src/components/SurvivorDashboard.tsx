@@ -6,6 +6,7 @@ import {
   GameCharacter,
   GameItem,
   SlotKey,
+  MatchHistoryStatus,
 } from '../types/game';
 import {
   CHARACTERS_CATALOG,
@@ -31,6 +32,17 @@ import {
   XCircle,
   Repeat,
   Lock,
+  ChevronRight,
+  Camera,
+  Save,
+  StopCircle,
+  Trophy,
+  PauseCircle,
+  X,
+  Sparkles,
+  UserMinus,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 
 interface SurvivorDashboardProps {
@@ -41,6 +53,18 @@ interface SurvivorDashboardProps {
   viewedSurvivorId: string;
   onSelectViewedSurvivor: (id: string) => void;
   onPassTurn: () => void;
+  onOpenBoardSave: () => void;
+  onSaveMatchToHistory: (
+    status: MatchHistoryStatus,
+    customLog?: string,
+    aiSummary?: string
+  ) => Promise<void>;
+  onHostAbandonRoom: () => Promise<void>;
+  onPlayerAbandonMatch: (
+    survivorId: string,
+    mode: 'MARK_DEAD' | 'REASSIGN',
+    targetUsername?: string
+  ) => void;
   onAdjustXP: (survivorId: string, delta: number) => void;
   onAdjustWound: (survivorId: string, delta: 1 | -1) => void;
   onSpendAction: (survivorId: string) => void;
@@ -69,6 +93,10 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
   viewedSurvivorId,
   onSelectViewedSurvivor,
   onPassTurn,
+  onOpenBoardSave,
+  onSaveMatchToHistory,
+  onHostAbandonRoom,
+  onPlayerAbandonMatch,
   onAdjustXP,
   onAdjustWound,
   onSpendAction,
@@ -85,6 +113,82 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
 }) => {
   const [mobileSection, setMobileSection] = useState<'STATUS' | 'INVENTORY'>('STATUS');
   const [showPassTurnPrompt, setShowPassTurnPrompt] = useState(false);
+  const [hostMatchActionModal, setHostMatchActionModal] = useState<'SAVE' | 'END' | null>(null);
+  const [endModalSubStep, setEndModalSubStep] = useState<'MENU' | 'ABANDON' | 'CONCLUDE'>('MENU');
+  const [abandonTargetSurvivorId, setAbandonTargetSurvivorId] = useState<string>(
+    session.survivors[0]?.id || ''
+  );
+  const [reassignUsername, setReassignUsername] = useState<string>(
+    session.host_username || 'host'
+  );
+  const [concludeSummaryText, setConcludeSummaryText] = useState<string>('');
+  const [isGeneratingAiSummary, setIsGeneratingAiSummary] = useState<boolean>(false);
+  const [hostActionFeedback, setHostActionFeedback] = useState<string | null>(null);
+
+  const buildLocalQuickSummary = (): string => {
+    const parts = session.survivors.map((s, idx) => {
+      const char =
+        CHARACTERS_CATALOG.find((c) => c.id === s.character_id) ||
+        CHARACTERS_CATALOG[0];
+      const wounds = s.health;
+      const isDead = wounds >= s.max_health;
+      const items = [
+        s.inventory_json.handLeft,
+        s.inventory_json.handRight,
+        ...s.inventory_json.backpack,
+      ].filter((it): it is GameItem => Boolean(it && it.category !== 'WOUND'));
+
+      if (isDead) {
+        return `${char.name} morreu durante a partida pois não conseguiu escapar dos zumbis (${wounds}/${s.max_health} ferimentos)`;
+      }
+      if (wounds >= s.max_health - 1) {
+        return `${char.name} escapou por pouco (${wounds} ferimentos)${
+          idx === session.survivors.length - 1 ? ' e foi o último a concluir a missão' : ''
+        }`;
+      }
+      if (items.length >= 3) {
+        return `${char.name} terminou com ${wounds} ferimento(s) e com bastante loot de equipamentos (${items
+          .slice(0, 2)
+          .map((i) => i.name)
+          .join(', ')})`;
+      }
+      return `${char.name} concluiu com ${wounds} ferimento(s) e ${s.xp} XP`;
+    });
+    return `Após ${session.round} rodada(s) intensas na ${session.room_name}, ${parts.join(', ')}.`;
+  };
+
+  const handleGenerateAiSummary = async () => {
+    setIsGeneratingAiSummary(true);
+    try {
+      const enrichedSurvivors = session.survivors.map((s) => {
+        const char = CHARACTERS_CATALOG.find((c) => c.id === s.character_id);
+        return {
+          ...s,
+          character_name: char?.name || s.character_id,
+        };
+      });
+      const res = await fetch('/api/matches/generate-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session: {
+            ...session,
+            survivors: enrichedSurvivors,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.summary) {
+        setConcludeSummaryText(data.summary);
+      } else {
+        setConcludeSummaryText(buildLocalQuickSummary());
+      }
+    } catch {
+      setConcludeSummaryText(buildLocalQuickSummary());
+    } finally {
+      setIsGeneratingAiSummary(false);
+    }
+  };
   const [attackPromptModal, setAttackPromptModal] = useState<{
     item: GameItem;
     isDualAkimbo: boolean;
@@ -379,32 +483,62 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={onPassTurn}
-              disabled={session.is_zombie_phase && !isCurrentUserHost}
-              className={`w-full sm:w-auto px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap ${
-                session.is_zombie_phase && !isCurrentUserHost
-                  ? 'bg-zinc-900 border border-zinc-800 text-zinc-500 cursor-not-allowed'
-                  : 'bg-red-600 hover:bg-red-500 text-white cursor-pointer'
-              }`}
-            >
-              {session.is_zombie_phase && !isCurrentUserHost ? (
+            <div className="flex flex-wrap items-stretch sm:items-center gap-2">
+              {/* Host-only: Salvar Partida & Encerrar Partida */}
+              {isCurrentUserHost && (
                 <>
-                  <Lock className="w-4 h-4" />
-                  <span>Só o Host (@{session.host_username}) Passa</span>
-                </>
-              ) : (
-                <>
-                  <FastForward className="w-4 h-4" />
-                  <span>
-                    {session.is_zombie_phase
-                      ? 'Encerrar Fase dos Zumbis (Host)'
-                      : 'Passar Turno'}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setHostMatchActionModal('SAVE')}
+                    title="Exclusivo do Host: Salvar partida (Pausada) ou salvar imagem do tabuleiro no banco de dados"
+                    className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/60 text-amber-300 font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                  >
+                    <Save className="w-4 h-4 text-amber-400" />
+                    <span>Salvar Partida</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEndModalSubStep('MENU');
+                      setHostMatchActionModal('END');
+                    }}
+                    title="Exclusivo do Host: Pausar, Abandonar ou Concluir a partida"
+                    className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-zinc-900 hover:bg-red-950/60 border border-red-800/60 text-red-300 font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                  >
+                    <StopCircle className="w-4 h-4 text-red-400" />
+                    <span>Encerrar Partida</span>
+                  </button>
                 </>
               )}
-            </button>
+
+              <button
+                type="button"
+                onClick={onPassTurn}
+                disabled={session.is_zombie_phase && !isCurrentUserHost}
+                className={`w-full sm:w-auto px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap ${
+                  session.is_zombie_phase && !isCurrentUserHost
+                    ? 'bg-zinc-900 border border-zinc-800 text-zinc-500 cursor-not-allowed'
+                    : 'bg-red-600 hover:bg-red-500 text-white cursor-pointer'
+                }`}
+              >
+                {session.is_zombie_phase && !isCurrentUserHost ? (
+                  <>
+                    <Lock className="w-4 h-4" />
+                    <span>Só o Host (@{session.host_username}) Passa</span>
+                  </>
+                ) : (
+                  <>
+                    <FastForward className="w-4 h-4" />
+                    <span>
+                      {session.is_zombie_phase
+                        ? 'Encerrar Fase dos Zumbis (Host)'
+                        : 'Passar Turno'}
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -633,75 +767,241 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
             mobileSection === 'INVENTORY' ? 'hidden lg:block' : 'block'
           }`}
         >
-          {/* Survivor Identity + Counters Card */}
+          {/* Survivor Identity + Zombicide ID Card Layout + Counters Card */}
           <div className="p-4 sm:p-5 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-4 sm:space-y-5">
-            <div className="flex flex-col xs:flex-row sm:flex-row gap-4 items-center sm:items-stretch">
-              <CharacterAvatar
-                character={character}
-                variant="portrait"
-                size="md"
-                className="shrink-0 border border-zinc-800"
-              />
-              <div className="flex-1 min-w-0 w-full flex flex-col justify-between">
-                <div className="text-center sm:text-left">
-                  <div className="flex items-center justify-center sm:justify-start gap-2 text-xs text-zinc-400">
-                    {(() => {
-                      const playerProfile = session.joined_players.find(
-                        (p) =>
-                          p.username.toLowerCase() ===
-                          viewedSurvivor.username.toLowerCase()
-                      );
-                      return playerProfile?.avatar_url ? (
-                        <img
-                          src={playerProfile.avatar_url}
-                          alt={viewedSurvivor.username}
-                          className="w-5 h-5 rounded-full object-cover object-top border border-red-500/60"
-                        />
-                      ) : null;
-                    })()}
-                    <span className="text-zinc-200 font-semibold">
-                      @{viewedSurvivor.username}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span>{character.edition}</span>
-                  </div>
-                  <h2 className="text-2xl font-bold text-white font-display mt-0.5">
-                    {character.name}
-                  </h2>
-                  <p className="text-xs text-red-500 font-medium">
-                    {character.title}
-                  </p>
+            {/* Authentic Zombicide ID Card Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                  {(() => {
+                    const playerProfile = session.joined_players.find(
+                      (p) =>
+                        p.username.toLowerCase() ===
+                        viewedSurvivor.username.toLowerCase()
+                    );
+                    return playerProfile?.avatar_url ? (
+                      <img
+                        src={playerProfile.avatar_url}
+                        alt={viewedSurvivor.username}
+                        className="w-5 h-5 rounded-full object-cover object-top border border-red-500/60"
+                      />
+                    ) : null;
+                  })()}
+                  <span className="text-zinc-200 font-semibold">
+                    @{viewedSurvivor.username}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-[10px] font-mono-tabular uppercase tracking-widest px-2 py-0.5 rounded bg-red-600/20 border border-red-500/40 text-red-400 font-bold">
+                    {character.edition}
+                  </span>
+                </div>
+                <h2 className="text-2xl font-bold text-white font-display mt-1 truncate">
+                  {character.name}
+                </h2>
+                <p className="text-xs text-red-500 font-medium truncate">
+                  {character.title}
+                </p>
+              </div>
 
-                  {isEliminated && (
-                    <div className="mt-2 p-2 rounded-lg bg-red-950/70 border border-red-500 text-xs font-bold text-red-300 flex items-center justify-center sm:justify-start gap-1.5">
-                      <Skull className="w-4 h-4 shrink-0" />
-                      <span>SOBREVIVENTE ELIMINADO (3 CORAÇÕES PARTIDOS)</span>
-                    </div>
-                  )}
+              {/* Compact Heart Status Summary */}
+              <div className="flex items-center gap-1 shrink-0 bg-zinc-950 px-2.5 py-1.5 rounded-xl border border-zinc-800">
+                {Array.from({ length: viewedSurvivor.max_health }).map(
+                  (_, idx) => {
+                    const healthyCount =
+                      viewedSurvivor.max_health - viewedSurvivor.health;
+                    const isBroken = idx >= healthyCount;
+                    return isBroken ? (
+                      <HeartCrack
+                        key={idx}
+                        className="w-4 h-4 text-zinc-500"
+                      />
+                    ) : (
+                      <Heart
+                        key={idx}
+                        className="w-4 h-4 text-red-500 fill-red-600"
+                      />
+                    );
+                  }
+                )}
+              </div>
+            </div>
+
+            {isEliminated && (
+              <div className="p-2.5 rounded-xl bg-red-950/70 border border-red-500 text-xs font-bold text-red-300 flex items-center justify-center gap-1.5">
+                <Skull className="w-4 h-4 shrink-0" />
+                <span>
+                  SOBREVIVENTE ELIMINADO ({viewedSurvivor.max_health} CORAÇÕES PARTIDOS)
+                </span>
+              </div>
+            )}
+
+            {/* Zombicide ID Card Body: Left Skill Bars + Right Portrait & Vertical Wound Track */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5 items-stretch p-3 rounded-xl bg-gradient-to-br from-zinc-900 via-zinc-950 to-black border border-zinc-800">
+              {/* Left 7 Cols: Colored Skill Bars */}
+              <div className="sm:col-span-7 flex flex-col justify-center space-y-1.5">
+                {/* BLUE (0 XP) */}
+                <div className="w-full flex items-stretch rounded-md overflow-hidden border border-sky-500/60 bg-zinc-100 shadow-sm">
+                  <span className="w-8 bg-sky-600 text-white flex items-center justify-center shrink-0 font-bold">
+                    <ChevronRight className="w-4 h-4 stroke-[3]" />
+                  </span>
+                  <div className="px-2.5 py-1.5 flex-1 min-w-0 flex items-center justify-between gap-1">
+                    <span className="text-xs font-extrabold uppercase tracking-tight text-zinc-950 truncate">
+                      {character.skills.blue.name}
+                    </span>
+                    <span className="text-[9px] font-mono-tabular font-bold text-sky-700 shrink-0">
+                      ATIVA
+                    </span>
+                  </div>
                 </div>
 
-                {/* Compact Heart Status Summary inside Survivor Identity Card */}
-                <div className="pt-3 mt-3 sm:mt-0 border-t border-zinc-800/80 flex items-center justify-between gap-2">
-                  <span className="text-xs text-zinc-400">Estado Vital:</span>
-                  <div className="flex items-center gap-1.5">
-                    {Array.from({ length: viewedSurvivor.max_health }).map(
-                      (_, idx) => {
-                        const healthyCount =
-                          viewedSurvivor.max_health - viewedSurvivor.health;
-                        const isBroken = idx >= healthyCount;
-                        return isBroken ? (
-                          <HeartCrack
-                            key={idx}
-                            className="w-4 h-4 text-zinc-500"
-                          />
-                        ) : (
-                          <Heart
-                            key={idx}
-                            className="w-4 h-4 text-red-500 fill-red-600"
-                          />
-                        );
-                      }
-                    )}
+                {/* YELLOW (7 XP) */}
+                <div
+                  className={`w-full flex items-stretch rounded-md overflow-hidden border shadow-sm transition-opacity ${
+                    viewedSurvivor.xp >= 7
+                      ? 'border-amber-400 bg-zinc-100 opacity-100'
+                      : 'border-zinc-700/80 bg-zinc-200/80 opacity-60'
+                  }`}
+                >
+                  <span className="w-8 bg-amber-400 text-black flex items-center justify-center shrink-0 font-bold">
+                    <ChevronRight className="w-4 h-4 stroke-[3]" />
+                  </span>
+                  <div className="px-2.5 py-1.5 flex-1 min-w-0 flex items-center justify-between gap-1">
+                    <span className="text-xs font-extrabold uppercase tracking-tight text-zinc-950 truncate">
+                      {character.skills.yellow.name}
+                    </span>
+                    <span className="text-[9px] font-mono-tabular font-bold text-zinc-600 shrink-0">
+                      {viewedSurvivor.xp >= 7 ? 'ATIVA' : '7 XP'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ORANGE (19 XP) */}
+                {character.skills.orange.map((sk) => {
+                  const isChosen =
+                    viewedSurvivor.xp >= 19 &&
+                    viewedSurvivor.selected_skills_json.orange === sk.id;
+                  return (
+                    <button
+                      key={sk.id}
+                      type="button"
+                      onClick={() => {
+                        if (viewedSurvivor.xp >= 19) {
+                          onOpenSkillModal(viewedSurvivor.id, 'ORANGE');
+                        }
+                      }}
+                      className={`w-full flex items-stretch rounded-md overflow-hidden border text-left shadow-sm transition-all ${
+                        isChosen
+                          ? 'border-orange-400 ring-1 ring-orange-400 bg-white opacity-100'
+                          : viewedSurvivor.xp >= 19
+                          ? 'border-zinc-700/80 bg-zinc-100 opacity-75 hover:opacity-100 cursor-pointer'
+                          : 'border-zinc-700/80 bg-zinc-200/80 opacity-55'
+                      }`}
+                    >
+                      <span className="w-8 bg-orange-500 text-white flex items-center justify-center shrink-0 font-bold">
+                        <ChevronRight className="w-4 h-4 stroke-[3]" />
+                      </span>
+                      <div className="px-2.5 py-1.5 flex-1 min-w-0 flex items-center justify-between gap-1">
+                        <span className="text-xs font-extrabold uppercase tracking-tight text-zinc-950 truncate">
+                          {sk.name}
+                        </span>
+                        <span className="text-[9px] font-mono-tabular font-bold text-orange-700 shrink-0">
+                          {isChosen ? 'ESCOLHIDA' : '19 XP'}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+
+                {/* RED (43 XP) */}
+                {character.skills.red.map((sk) => {
+                  const isChosen =
+                    viewedSurvivor.xp >= 43 &&
+                    viewedSurvivor.selected_skills_json.red === sk.id;
+                  return (
+                    <button
+                      key={sk.id}
+                      type="button"
+                      onClick={() => {
+                        if (viewedSurvivor.xp >= 43) {
+                          onOpenSkillModal(viewedSurvivor.id, 'RED');
+                        }
+                      }}
+                      className={`w-full flex items-stretch rounded-md overflow-hidden border text-left shadow-sm transition-all ${
+                        isChosen
+                          ? 'border-red-500 ring-1 ring-red-500 bg-white opacity-100'
+                          : viewedSurvivor.xp >= 43
+                          ? 'border-zinc-700/80 bg-zinc-100 opacity-75 hover:opacity-100 cursor-pointer'
+                          : 'border-zinc-700/80 bg-zinc-200/80 opacity-55'
+                      }`}
+                    >
+                      <span className="w-8 bg-red-600 text-white flex items-center justify-center shrink-0 font-bold">
+                        <ChevronRight className="w-4 h-4 stroke-[3]" />
+                      </span>
+                      <div className="px-2.5 py-1.5 flex-1 min-w-0 flex items-center justify-between gap-1">
+                        <span className="text-xs font-extrabold uppercase tracking-tight text-zinc-950 truncate">
+                          {sk.name}
+                        </span>
+                        <span className="text-[9px] font-mono-tabular font-bold text-red-700 shrink-0">
+                          {isChosen ? 'ESCOLHIDA' : '43 XP'}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Right 5 Cols: Portrait + Official Vertical Health Track */}
+              <div className="sm:col-span-5 relative rounded-xl overflow-hidden border border-zinc-700/80 bg-zinc-950 min-h-[215px] flex items-end justify-end">
+                <CharacterAvatar
+                  character={character}
+                  variant="portrait"
+                  size="xl"
+                  className="absolute inset-0 w-full h-full rounded-none border-0"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-transparent pointer-events-none" />
+
+                {/* Interactive Right-Edge Health Column (3, 2, 1, Skull or 2, 1, Skull) */}
+                <div className="relative z-10 m-2 flex flex-col gap-1">
+                  {(viewedSurvivor.max_health === 2 ? [2, 1] : [3, 2, 1]).map(
+                    (hpNum) => {
+                      const remainingHp =
+                        viewedSurvivor.max_health - viewedSurvivor.health;
+                      const isActiveHp = remainingHp >= hpNum;
+                      return (
+                        <button
+                          key={hpNum}
+                          type="button"
+                          onClick={() =>
+                            onAdjustWound(
+                              viewedSurvivor.id,
+                              isActiveHp ? 1 : -1
+                            )
+                          }
+                          title={
+                            isActiveHp
+                              ? `Vida ${hpNum} ativa (toque para sofrer ferimento)`
+                              : `Vida ${hpNum} perdida (toque para curar)`
+                          }
+                          className={`w-9 h-8 rounded font-display font-extrabold text-base flex items-center justify-center shadow-md transition-all cursor-pointer ${
+                            isActiveHp
+                              ? 'bg-red-600 border border-white/40 text-white'
+                              : 'bg-zinc-900/90 border border-red-900/60 text-zinc-500 line-through'
+                          }`}
+                        >
+                          {hpNum}
+                        </button>
+                      );
+                    }
+                  )}
+                  <div
+                    title="Eliminado ao atingir a Caveira"
+                    className={`w-9 h-8 rounded border flex items-center justify-center shadow-md ${
+                      isEliminated
+                        ? 'bg-red-600 border-white text-white animate-pulse'
+                        : 'bg-black border-zinc-600 text-white'
+                    }`}
+                  >
+                    <Skull className="w-4 h-4" />
                   </div>
                 </div>
               </div>
@@ -1294,6 +1594,432 @@ export const SurvivorDashboard: React.FC<SurvivorDashboardProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Host-only Modal for "Salvar Partida" or "Encerrar Partida" */}
+      {isCurrentUserHost && hostMatchActionModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn"
+          onClick={() => setHostMatchActionModal(null)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-[#0A0A0C] border border-red-600/80 p-6 space-y-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-600/20 border border-red-500/40 flex items-center justify-center shrink-0">
+                  {hostMatchActionModal === 'SAVE' ? (
+                    <Save className="w-5 h-5 text-amber-400" />
+                  ) : (
+                    <StopCircle className="w-5 h-5 text-red-500" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white font-display">
+                    {hostMatchActionModal === 'SAVE'
+                      ? 'Salvar Partida no Banco de Dados (Host)'
+                      : 'Encerrar Partida no Banco de Dados (Host)'}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Sala #{session.room_code} · Rodada {session.round} · Host @{session.host_username}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHostMatchActionModal(null)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {hostMatchActionModal === 'SAVE' ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs sm:text-sm text-zinc-300">
+                  <p>
+                    Escolha como deseja salvar a partida da <strong>Sala #{session.room_code}</strong>:
+                  </p>
+                  <ul className="space-y-1.5 text-xs text-zinc-400 list-disc pl-4">
+                    <li>
+                      Ao salvar, a partida ativa é fechada, a tela volta para a <strong>área de Login</strong> e a sala fica guardada no <strong>Histórico de Partidas</strong> com estado <strong className="text-amber-400">PAUSADO</strong>.
+                    </li>
+                    <li>
+                      A gameplay só poderá ser resgatada pelo <strong>Histórico de Partidas</strong> digitando a <strong>senha da sala</strong>.
+                    </li>
+                    <li>
+                      Se desejar, anexe primeiro a <strong>imagem limpa do tabuleiro (sem grade 3x3)</strong> e use a Opção 2 somente se quiser.
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setHostMatchActionModal(null);
+                      await onSaveMatchToHistory('PAUSADO');
+                    }}
+                    className="w-full py-3.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                  >
+                    <PauseCircle className="w-4 h-4" />
+                    <span>Salvar Partida e Voltar para Login (Estado: PAUSADO)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHostMatchActionModal(null);
+                      onOpenBoardSave();
+                    }}
+                    className="w-full py-3 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Camera className="w-4 h-4 text-amber-400" />
+                    <span>Anexar Foto Limpa do Tabuleiro / Zonas Opcionais Antes de Salvar</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ENCERRAR PARTIDA MODAL: 1) PAUSAR, 2) ABANDONAR PARTIDA, 3) CONCLUÍDO (COM IA) */
+              <div className="space-y-4">
+                {endModalSubStep === 'MENU' && (
+                  <div className="space-y-3">
+                    <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs sm:text-sm text-zinc-300">
+                      Escolha uma das opções de encerramento para a <strong>Sala #{session.room_code}</strong>:
+                    </div>
+
+                    {/* OPÇÃO 1: PAUSAR -> Direciona para parte de enviar foto e marcar pins */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHostMatchActionModal(null);
+                        onOpenBoardSave();
+                      }}
+                      className="w-full p-4 rounded-xl bg-amber-600/15 hover:bg-amber-600/25 border border-amber-500/60 text-left transition-all flex items-start gap-3.5 cursor-pointer group"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center shrink-0 mt-0.5">
+                        <PauseCircle className="w-5 h-5 text-amber-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-amber-300 flex items-center justify-between">
+                          <span>1. PAUSAR PARTIDA</span>
+                          <ChevronRight className="w-4 h-4 text-amber-400 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                        <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                          Direciona você para a tela de <strong>enviar a foto do tabuleiro e marcar os pins</strong> dos personagens/zumbis antes de salvar no histórico como Pausado.
+                        </p>
+                      </div>
+                    </button>
+
+                    {/* OPÇÃO 2: ABANDONAR PARTIDA -> Host desfaz sala ou Player é marcado como morto / reassumido */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAbandonTargetSurvivorId(session.survivors[0]?.id || '');
+                        setReassignUsername(session.host_username || 'host');
+                        setEndModalSubStep('ABANDON');
+                      }}
+                      className="w-full p-4 rounded-xl bg-red-600/15 hover:bg-red-600/25 border border-red-500/60 text-left transition-all flex items-start gap-3.5 cursor-pointer group"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-400/50 flex items-center justify-center shrink-0 mt-0.5">
+                        <AlertTriangle className="w-5 h-5 text-red-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-red-300 flex items-center justify-between">
+                          <span>2. ABANDONAR PARTIDA</span>
+                          <ChevronRight className="w-4 h-4 text-red-400 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                        <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                          Se o <strong>Host</strong> abandonar, a sala é <strong>desfeita imediatamente</strong>. Se <strong>algum dos players</strong> sair, o personagem pode ser <strong>marcado como morto</strong> ou <strong>reassumido por outro player</strong>.
+                        </p>
+                      </div>
+                    </button>
+
+                    {/* OPÇÃO 3: CONCLUÍDO -> Missão cumprida + Breve resumo da partida com IA */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEndModalSubStep('CONCLUDE');
+                        handleGenerateAiSummary();
+                      }}
+                      className="w-full p-4 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/60 text-left transition-all flex items-start gap-3.5 cursor-pointer group"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center shrink-0 mt-0.5">
+                        <Trophy className="w-5 h-5 text-emerald-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-bold text-emerald-300 flex items-center justify-between">
+                          <span className="flex items-center gap-1.5">
+                            <span>3. CONCLUÍDO (MISSÃO CUMPRIDA)</span>
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                          </span>
+                          <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                        <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                          A missão foi concluída até o fim! Gera um <strong>breve resumo com IA</strong> dos turnos e do estado final dos personagens e salva no histórico de todos os players e do Host.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                )}
+
+                {endModalSubStep === 'ABANDON' && (
+                  <div className="space-y-4">
+                    <button
+                      type="button"
+                      onClick={() => setEndModalSubStep('MENU')}
+                      className="text-xs font-bold text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                    >
+                      ← Voltar às opções de Encerrar
+                    </button>
+
+                    {/* Caso A: Host solicita abandonar a sala inteira -> Desfeita imediatamente */}
+                    <div className="p-4 rounded-xl bg-red-950/35 border border-red-500/60 space-y-3">
+                      <div className="flex items-center gap-2 text-red-300 font-bold text-xs sm:text-sm">
+                        <StopCircle className="w-4 h-4 text-red-400 shrink-0" />
+                        <span>Opção A — Host Abandonar Partida (Desfazer Sala)</span>
+                      </div>
+                      <p className="text-xs text-zinc-300 leading-relaxed">
+                        Se o <strong>Host (@{session.host_username})</strong> solicitar o abandono geral, a <strong>Sala #{session.room_code} é desfeita imediatamente</strong> e todos os dispositivos voltam para a área de Login.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setHostMatchActionModal(null);
+                          await onHostAbandonRoom();
+                        }}
+                        className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                      >
+                        <StopCircle className="w-4 h-4" />
+                        <span>Desfazer Sala #{session.room_code} Imediatamente (Host)</span>
+                      </button>
+                    </div>
+
+                    {/* Caso B: Algum dos Players abandona -> Marcar como morto ou Reassumir por outro player */}
+                    <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-3">
+                      <div className="flex items-center gap-2 text-amber-300 font-bold text-xs sm:text-sm">
+                        <UserMinus className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Opção B — Jogador Abandonou (Morto ou Reassumir)</span>
+                      </div>
+                      <p className="text-xs text-zinc-400 leading-relaxed">
+                        Se apenas um dos jogadores precisou sair da mesa, escolha o personagem dele abaixo para <strong>marcá-lo como morto</strong> ou <strong>transferi-lo para outro player</strong> continuar jogando:
+                      </p>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-zinc-300 mb-1">
+                          Selecione o Personagem / Player que abandonou:
+                        </label>
+                        <select
+                          value={abandonTargetSurvivorId}
+                          onChange={(e) => setAbandonTargetSurvivorId(e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-black border border-zinc-700 text-xs sm:text-sm text-white focus:outline-none focus:border-red-500"
+                        >
+                          {session.survivors.map((s) => {
+                            const c =
+                              CHARACTERS_CATALOG.find((ch) => ch.id === s.character_id) ||
+                              CHARACTERS_CATALOG[0];
+                            return (
+                              <option key={s.id} value={s.id}>
+                                {c.name} (Jogador @{s.username}) — {s.health}/{s.max_health} Ferimentos
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-zinc-300 mb-1">
+                          Se for reassumido, qual player vai assumir o controle?
+                        </label>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {session.joined_players.map((p) => (
+                            <button
+                              key={p.user_id}
+                              type="button"
+                              onClick={() => setReassignUsername(p.username)}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-mono-tabular border cursor-pointer ${
+                                reassignUsername.toLowerCase() === p.username.toLowerCase()
+                                  ? 'bg-amber-500/20 border-amber-400 text-amber-200 font-bold'
+                                  : 'bg-black border-zinc-800 text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              @{p.username} {p.is_host ? '(Host)' : ''}
+                            </button>
+                          ))}
+                        </div>
+                        <input
+                          type="text"
+                          value={reassignUsername}
+                          onChange={(e) => setReassignUsername(e.target.value)}
+                          placeholder="Digite o @nickname do player que vai assumir"
+                          className="w-full px-3 py-2 rounded-xl bg-black border border-zinc-800 text-xs text-white focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!abandonTargetSurvivorId) return;
+                            onPlayerAbandonMatch(abandonTargetSurvivorId, 'MARK_DEAD');
+                            setHostMatchActionModal(null);
+                            setHostActionFeedback('Personagem marcado como MORTO na mesa!');
+                            setTimeout(() => setHostActionFeedback(null), 3500);
+                          }}
+                          className="py-2.5 px-3 rounded-xl bg-red-900/70 hover:bg-red-800 border border-red-500/50 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Skull className="w-4 h-4 text-red-300" />
+                          <span>Marcar como Morto 💀</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!abandonTargetSurvivorId) return;
+                            onPlayerAbandonMatch(
+                              abandonTargetSurvivorId,
+                              'REASSIGN',
+                              reassignUsername
+                            );
+                            setHostMatchActionModal(null);
+                            setHostActionFeedback(
+                              `Personagem reassumido por @${reassignUsername.replace(/^@+/, '')}!`
+                            );
+                            setTimeout(() => setHostActionFeedback(null), 3500);
+                          }}
+                          className="py-2.5 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Repeat className="w-4 h-4" />
+                          <span>Reassumir por @{reassignUsername.replace(/^@+/, '')}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {endModalSubStep === 'CONCLUDE' && (
+                  <div className="space-y-4">
+                    <button
+                      type="button"
+                      onClick={() => setEndModalSubStep('MENU')}
+                      className="text-xs font-bold text-zinc-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                    >
+                      ← Voltar às opções de Encerrar
+                    </button>
+
+                    <div className="p-4 rounded-xl bg-emerald-950/25 border border-emerald-500/50 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs sm:text-sm">
+                          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span>Resumo Tático da Partida (Leitura com IA)</span>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isGeneratingAiSummary}
+                          onClick={handleGenerateAiSummary}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-[11px] font-semibold text-emerald-300 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw
+                            className={`w-3 h-3 ${isGeneratingAiSummary ? 'animate-spin' : ''}`}
+                          />
+                          <span>{isGeneratingAiSummary ? 'Lendo turnos...' : 'Gerar Resumo IA'}</span>
+                        </button>
+                      </div>
+
+                      <p className="text-[11px] text-zinc-400">
+                        A IA lê o histórico de turnos e o estado final de cada sobrevivente (ferimentos, mortes, equipamentos e quem concluiu a missão). Você também pode editar o texto abaixo se desejar:
+                      </p>
+
+                      {isGeneratingAiSummary ? (
+                        <div className="p-4 rounded-xl bg-black/80 border border-zinc-800 text-xs text-emerald-300 flex items-center justify-center gap-2">
+                          <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                          <span>Analisando turnos e estado final dos personagens com IA...</span>
+                        </div>
+                      ) : (
+                        <textarea
+                          rows={4}
+                          value={concludeSummaryText}
+                          onChange={(e) => setConcludeSummaryText(e.target.value)}
+                          placeholder="Ex: Ned terminou com 2 ferimentos e com bastante loot de equipamentos, Wanda morreu durante a partida pois não conseguiu escapar de uns corredores, Josh escapou por pouco e foi o último a concluir a missão."
+                          className="w-full p-3 rounded-xl bg-black border border-emerald-500/40 text-xs sm:text-sm text-zinc-100 leading-relaxed focus:outline-none focus:border-emerald-400"
+                        />
+                      )}
+
+                      {/* Estado final visual de cada personagem */}
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 block">
+                          Estado Final dos Personagens na Conclusão:
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
+                          {session.survivors.map((s) => {
+                            const c =
+                              CHARACTERS_CATALOG.find((ch) => ch.id === s.character_id) ||
+                              CHARACTERS_CATALOG[0];
+                            const dead = s.health >= s.max_health;
+                            const lootCount = [
+                              s.inventory_json.handLeft,
+                              s.inventory_json.handRight,
+                              ...s.inventory_json.backpack,
+                            ].filter((it) => it && it.category !== 'WOUND').length;
+                            return (
+                              <div
+                                key={s.id}
+                                className="p-2 rounded-lg bg-black/90 border border-zinc-800 flex items-center justify-between text-[11px]"
+                              >
+                                <div className="truncate">
+                                  <span className="font-bold text-white">{c.name}</span>{' '}
+                                  <span className="text-zinc-400">(@{s.username})</span>
+                                </div>
+                                <span
+                                  className={`font-mono-tabular font-bold shrink-0 ${
+                                    dead ? 'text-red-400' : 'text-emerald-400'
+                                  }`}
+                                >
+                                  {dead
+                                    ? 'MORTO 💀'
+                                    : `${s.health} Fer. · ${lootCount} Eq.`}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={isGeneratingAiSummary}
+                      onClick={async () => {
+                        const finalSummary =
+                          concludeSummaryText.trim() || buildLocalQuickSummary();
+                        setHostMatchActionModal(null);
+                        await onSaveMatchToHistory(
+                          'CONCLUIDO',
+                          `🏆 Missão CONCLUÍDA na Sala #${session.room_code}! Resumo: ${finalSummary}`,
+                          finalSummary
+                        );
+                      }}
+                      className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs sm:text-sm transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg"
+                    >
+                      <Trophy className="w-4 h-4" />
+                      <span>
+                        Confirmar Missão CONCLUÍDA e Salvar no Histórico de Todos
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {hostActionFeedback && (
+        <div className="fixed bottom-20 md:bottom-6 right-4 z-50 px-4 py-3 rounded-xl bg-emerald-950 border border-emerald-500 text-emerald-200 text-xs sm:text-sm font-bold shadow-2xl flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{hostActionFeedback}</span>
         </div>
       )}
     </div>

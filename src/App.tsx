@@ -10,6 +10,9 @@ import {
   SurvivorState,
   GameItem,
   SlotKey,
+  BoardSaveState,
+  MatchHistoryRecord,
+  MatchHistoryStatus,
 } from './types/game';
 import {
   CHARACTERS_CATALOG,
@@ -20,6 +23,8 @@ import { AuthAndLobby } from './components/AuthAndLobby';
 import { SurvivorDashboard } from './components/SurvivorDashboard';
 import { CatalogExplorer } from './components/CatalogExplorer';
 import { LevelUpModal } from './components/LevelUpModal';
+import { BoardStateSaveTracker } from './components/BoardStateSaveTracker';
+import { MatchHistoryPanel } from './components/MatchHistoryPanel';
 import { ZombieLogoIcon, BloodSplatterBackdrop } from './components/BloodDecor';
 import { soundFX } from './utils/sound';
 import {
@@ -37,13 +42,21 @@ import {
   HelpCircle,
   Heart,
   Dices,
+  Camera,
 } from 'lucide-react';
 
-type ActiveTab = 'LOBBY' | 'DASHBOARD' | 'CATALOG' | 'INSTRUCTIONS' | 'LOG';
+type ActiveTab =
+  | 'LOBBY'
+  | 'DASHBOARD'
+  | 'BOARD_SAVE'
+  | 'CATALOG'
+  | 'INSTRUCTIONS'
+  | 'LOG';
 
 const STORAGE_KEY_SESSION = 'zombicide_companion_session_v15';
 const STORAGE_KEY_USERS = 'zombicide_companion_users_v15';
 const STORAGE_KEY_CURRENT_USER = 'zombicide_companion_current_user_v15';
+const STORAGE_KEY_MATCH_HISTORY = 'zombicide_companion_match_history_v15';
 
 // Deterministic simulated Argon2id / Bcrypt hash for RF01.2
 function computePasswordHash(plain: string, saltUser: string): string {
@@ -103,7 +116,7 @@ function createInitialSurvivorState(
     character_id: characterId,
     xp: initialXp,
     health: 0,
-    max_health: 3,
+    max_health: char.maxHealth || 3,
     actions_left: caps.maxActions,
     max_actions: caps.maxActions,
     moves_left: caps.freeMoveActions > 0 ? caps.freeMoveActions : 1,
@@ -160,6 +173,16 @@ export default function App() {
       // ignore
     }
     return null;
+  });
+
+  const [matchHistory, setMatchHistory] = useState<MatchHistoryRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MATCH_HISTORY);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // ignore
+    }
+    return [];
   });
 
   const isRemoteSyncRef = useRef(false);
@@ -249,12 +272,15 @@ export default function App() {
         const res = await fetch('/api/session');
         if (!res.ok) return;
         const data = await res.json();
-        if (data && data.session) {
+        if (data && 'session' in data) {
           setSession((prev) => {
-            const prevJson = prev ? JSON.stringify(prev) : '';
-            const nextJson = JSON.stringify(data.session);
+            const prevJson = prev ? JSON.stringify(prev) : 'null';
+            const nextJson = data.session ? JSON.stringify(data.session) : 'null';
             if (prevJson !== nextJson) {
               isRemoteSyncRef.current = true;
+              if (!data.session) {
+                setActiveTab('LOBBY');
+              }
               return data.session;
             }
             return prev;
@@ -269,6 +295,30 @@ export default function App() {
       window.removeEventListener('storage', handleStorageEvent);
       window.clearInterval(interval);
     };
+  }, []);
+
+  // Load and sync Match History from the database on mount & periodically
+  useEffect(() => {
+    const fetchMatchHistory = async () => {
+      try {
+        const res = await fetch('/api/matches/history');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && Array.isArray(data.matches)) {
+          setMatchHistory(data.matches);
+          localStorage.setItem(
+            STORAGE_KEY_MATCH_HISTORY,
+            JSON.stringify(data.matches)
+          );
+        }
+      } catch {
+        // ignore network error
+      }
+    };
+
+    fetchMatchHistory();
+    const histInterval = window.setInterval(fetchMatchHistory, 4000);
+    return () => window.clearInterval(histInterval);
   }, []);
 
   useEffect(() => {
@@ -490,14 +540,36 @@ export default function App() {
   const handleAddSurvivorToTable = (username: string, characterId: string) => {
     soundFX.playLevelUp();
     setSession((prev) => {
-      if (!prev) return prev;
-      const targetUser = username.trim() || prev.host_username;
-      const filtered = prev.survivors.filter(
+      const baseSession: GameSession = prev || {
+        id: `sess_${Date.now()}`,
+        room_code: 'ZMB204',
+        room_name: 'Mesa Zombicide',
+        room_password_hash: computePasswordHash('mesa123', 'ZMB204'),
+        host_username: username.trim() || currentUser?.username || 'host',
+        round: 1,
+        first_player_index: 0,
+        turn_order_index: 0,
+        is_zombie_phase: false,
+        status: 'IN_PROGRESS',
+        joined_players: [
+          {
+            user_id: currentUser?.id || `usr_${Date.now()}`,
+            username: username.trim() || currentUser?.username || 'host',
+            avatar_url: currentUser?.avatar_url || '/assets/survivors/Wanda.webp',
+            is_host: true,
+            joined_at: new Date().toISOString(),
+          },
+        ],
+        survivors: [],
+        combat_log: [],
+      };
+      const targetUser = username.trim() || baseSession.host_username;
+      const filtered = baseSession.survivors.filter(
         (s) => s.character_id !== characterId
       );
-      if (filtered.length >= 6) return prev;
+      if (filtered.length >= 6) return baseSession;
       const newSurv = createInitialSurvivorState(
-        prev.id,
+        baseSession.id,
         targetUser,
         characterId,
         0
@@ -506,11 +578,11 @@ export default function App() {
       const nextSurvivors = [...filtered, newSurv];
       setViewedSurvivorId(newSurv.id);
       return {
-        ...prev,
+        ...baseSession,
         status: 'IN_PROGRESS',
         survivors: nextSurvivors,
         combat_log: appendLog(
-          prev,
+          baseSession,
           `@${targetUser} escolheu o sobrevivente ${char?.name || characterId} (${char?.edition}) e entrou na mesa de jogo.`,
           'TURN'
         ),
@@ -565,6 +637,30 @@ export default function App() {
     setActiveTab('LOBBY');
   };
 
+  const handleUpdateBoardSave = (
+    newSave: BoardSaveState,
+    logMessage?: string
+  ) => {
+    setSession((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        board_save: newSave,
+        combat_log: logMessage
+          ? appendLog(prev, logMessage, 'TURN')
+          : prev.combat_log,
+      };
+    });
+  };
+
+  const handleImportFullSession = (importedSession: GameSession) => {
+    setSession(importedSession);
+    if (importedSession.survivors[0]?.id) {
+      setViewedSurvivorId(importedSession.survivors[0].id);
+    }
+    setActiveTab('BOARD_SAVE');
+  };
+
   // Determine whether the active device/player is the Host of the room
   const isCurrentUserHost = Boolean(
     session &&
@@ -572,6 +668,313 @@ export default function App() {
         currentUser.username.toLowerCase() ===
           session.host_username.toLowerCase())
   );
+
+  // Host saves or ends the current match into the Database Match History (PAUSADO, CONCLUIDO, ENCERRADO)
+  const handleSaveMatchToHistory = async (
+    historyStatus: MatchHistoryStatus,
+    customLog?: string,
+    aiSummary?: string
+  ) => {
+    if (!session || !isCurrentUserHost) return;
+    soundFX.playLevelUp();
+
+    const statusLabel =
+      historyStatus === 'PAUSADO'
+        ? 'PAUSADA'
+        : historyStatus === 'CONCLUIDO'
+        ? 'CONCLUÍDA'
+        : 'ENCERRADA';
+
+    const logEntryMsg =
+      customLog ||
+      `💾 O Host @${session.host_username} registrou a partida da Sala #${session.room_code} no Histórico do Banco de Dados com estado: ${statusLabel}.`;
+
+    const participantSet = new Set<string>();
+    if (session.host_username) participantSet.add(session.host_username);
+    session.joined_players.forEach((p) => {
+      if (p.username) participantSet.add(p.username);
+    });
+    session.survivors.forEach((s) => {
+      if (s.username) participantSet.add(s.username);
+    });
+
+    const updatedSession: GameSession = {
+      ...session,
+      history_status: historyStatus,
+      ai_summary: aiSummary || session.ai_summary,
+      status:
+        historyStatus === 'PAUSADO'
+          ? 'PAUSED'
+          : historyStatus === 'CONCLUIDO'
+          ? 'FINISHED'
+          : 'ENDED',
+      combat_log: appendLog(session, logEntryMsg, 'TURN'),
+    };
+
+    setSession(updatedSession);
+
+    try {
+      const res = await fetch('/api/matches/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session: updatedSession,
+          historyStatus,
+          aiSummary: aiSummary || session.ai_summary,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.matches)) {
+          setMatchHistory(data.matches);
+          localStorage.setItem(
+            STORAGE_KEY_MATCH_HISTORY,
+            JSON.stringify(data.matches)
+          );
+        }
+      }
+    } catch {
+      // Fallback update local history if offline
+      const now = Date.now();
+      const fallbackRecord: MatchHistoryRecord = {
+        id: updatedSession.id,
+        room_code: updatedSession.room_code,
+        room_name: updatedSession.room_name,
+        room_password_hash: updatedSession.room_password_hash,
+        host_username: updatedSession.host_username,
+        participants: Array.from(participantSet),
+        history_status: historyStatus,
+        saved_at: new Date(now).toLocaleString('pt-BR'),
+        saved_timestamp: now,
+        round: updatedSession.round,
+        ai_summary: aiSummary || updatedSession.ai_summary,
+        survivor_Summary: updatedSession.survivors.map((s) => ({
+          id: s.id,
+          username: s.username,
+          character_id: s.character_id,
+          xp: s.xp,
+          health: s.health,
+          max_health: s.max_health,
+        })),
+        has_board_photo: Boolean(updatedSession.board_save?.photo_data_url),
+        pins_count: updatedSession.board_save?.pins.length || 0,
+        zones_count: updatedSession.board_save?.zones.length || 0,
+        session_snapshot: updatedSession,
+      };
+      setMatchHistory((prev) => {
+        const next = [
+          fallbackRecord,
+          ...prev.filter((m) => m.id !== fallbackRecord.id),
+        ];
+        localStorage.setItem(STORAGE_KEY_MATCH_HISTORY, JSON.stringify(next));
+        return next;
+      });
+    }
+
+    // Close the active gameplay session and return to the Login screen (LOBBY) so it can ONLY be rescued via Match History
+    setSession(null);
+    setViewedSurvivorId('');
+    setActiveTab('LOBBY');
+  };
+
+  // Host Abandons Match -> Room is disbanded immediately for everyone
+  const handleHostAbandonRoom = async () => {
+    if (!session) return;
+    soundFX.playWound();
+    const roomCode = session.room_code;
+    try {
+      await fetch('/api/session/abandon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomCode }),
+      });
+    } catch {
+      // ignore offline
+    }
+    setSession(null);
+    setViewedSurvivorId('');
+    setActiveTab('LOBBY');
+  };
+
+  // Player Abandons Match -> Their character is either marked as DEAD or REASSUMED by another player
+  const handlePlayerAbandonMatch = (
+    survivorId: string,
+    mode: 'MARK_DEAD' | 'REASSIGN',
+    targetUsername?: string
+  ) => {
+    if (!session) return;
+    const woundItem = ITEMS_DATABASE.find((i) => i.id === 'eq_wound')!;
+
+    if (mode === 'MARK_DEAD') {
+      soundFX.playWound();
+    } else {
+      soundFX.playClick();
+    }
+
+    setSession((prev) => {
+      if (!prev) return prev;
+      let logMsg = '';
+      const nextSurvivors = prev.survivors.map((surv) => {
+        if (surv.id !== survivorId) return surv;
+        const char =
+          CHARACTERS_CATALOG.find((c) => c.id === surv.character_id) ||
+          CHARACTERS_CATALOG[0];
+
+        if (mode === 'MARK_DEAD') {
+          logMsg = `💀 O jogador @${surv.username} abandonou a partida! Seu personagem ${char.name} foi marcado como MORTO (${surv.max_health}/${surv.max_health} ferimentos).`;
+          return {
+            ...surv,
+            health: surv.max_health,
+            actions_left: 0,
+            moves_left: 0,
+            inventory_json: {
+              handLeft: { ...woundItem },
+              handRight: { ...woundItem },
+              backpack: [{ ...woundItem }, { ...woundItem }, { ...woundItem }],
+            },
+          };
+        }
+
+        const newOwner = (targetUsername || prev.host_username).trim().replace(/^@+/, '');
+        logMsg = `🔄 O jogador @${surv.username} deixou a partida! Seu personagem ${char.name} foi reassumido por @${newOwner}.`;
+        return {
+          ...surv,
+          username: newOwner,
+          user_id: `usr_${newOwner.toLowerCase()}`,
+        };
+      });
+
+      return {
+        ...prev,
+        survivors: nextSurvivors,
+        combat_log: logMsg ? appendLog(prev, logMsg, 'WOUND') : prev.combat_log,
+      };
+    });
+  };
+
+  // Host enters a saved room from the Match History and types the room password to load the saved match
+  const handleLoadMatchWithPassword = async (
+    matchId: string,
+    roomCode: string,
+    passwordPlain: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const code = roomCode.trim().toUpperCase();
+    const attemptedHash = computePasswordHash(passwordPlain.trim(), `room_${code}`);
+
+    try {
+      const res = await fetch('/api/matches/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matchId,
+          roomCode: code,
+          passwordHash: attemptedHash,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return {
+          success: false,
+          message:
+            data?.message ||
+            'Senha da sala incorreta! Digite a senha cadastrada pelo Host da sala.',
+        };
+      }
+
+      const loadedSession: GameSession = data.session;
+      soundFX.playLevelUp();
+
+      // Authenticate the device as the Host of the restored room
+      handleRegisterOrLogin(loadedSession.host_username);
+      setSession({
+        ...loadedSession,
+        status: 'IN_PROGRESS',
+        combat_log: appendLog(
+          loadedSession,
+          `🔓 Host @${loadedSession.host_username} autenticou a senha da Sala #${loadedSession.room_code} e carregou a partida salva (Rodada ${loadedSession.round})!`,
+          'TURN'
+        ),
+      });
+
+      if (loadedSession.survivors[0]?.id) {
+        setViewedSurvivorId(loadedSession.survivors[0].id);
+      }
+
+      setActiveTab(
+        loadedSession.survivors.length > 0 ? 'DASHBOARD' : 'LOBBY'
+      );
+
+      return {
+        success: true,
+        message: `Partida da Sala #${loadedSession.room_code} carregada com sucesso!`,
+      };
+    } catch {
+      // Fallback local verification
+      const localFound = matchHistory.find(
+        (m) => m.id === matchId || m.room_code.toUpperCase() === code
+      );
+      if (!localFound) {
+        return {
+          success: false,
+          message: 'Partida não encontrada no histórico.',
+        };
+      }
+      if (
+        localFound.room_password_hash &&
+        localFound.room_password_hash !== attemptedHash
+      ) {
+        return {
+          success: false,
+          message: 'Senha da sala incorreta! Digite a senha definida pelo Host.',
+        };
+      }
+
+      const loadedSession = localFound.session_snapshot;
+      soundFX.playLevelUp();
+      handleRegisterOrLogin(loadedSession.host_username);
+      setSession({
+        ...loadedSession,
+        status: 'IN_PROGRESS',
+      });
+      if (loadedSession.survivors[0]?.id) {
+        setViewedSurvivorId(loadedSession.survivors[0].id);
+      }
+      setActiveTab(
+        loadedSession.survivors.length > 0 ? 'DASHBOARD' : 'LOBBY'
+      );
+      return {
+        success: true,
+        message: `Partida da Sala #${loadedSession.room_code} carregada com sucesso!`,
+      };
+    }
+  };
+
+  const handleDeleteMatchRecord = async (matchId: string) => {
+    soundFX.playClick();
+    try {
+      const res = await fetch(`/api/matches/${matchId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.matches)) {
+          setMatchHistory(data.matches);
+          localStorage.setItem(
+            STORAGE_KEY_MATCH_HISTORY,
+            JSON.stringify(data.matches)
+          );
+          return;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setMatchHistory((prev) => {
+      const next = prev.filter((m) => m.id !== matchId);
+      localStorage.setItem(STORAGE_KEY_MATCH_HISTORY, JSON.stringify(next));
+      return next;
+    });
+  };
 
   // RF02.3 & RF02.4 — Pass Turn & Rotate First Player Marker on New Round
   const handlePassTurn = () => {
@@ -1316,7 +1719,7 @@ export default function App() {
                 setActiveTab('DASHBOARD');
               }}
               className={`transition-colors whitespace-nowrap py-1 border-b-2 ${
-                activeTab === 'DASHBOARD'
+                activeTab === 'DASHBOARD' || activeTab === 'BOARD_SAVE'
                   ? 'text-red-500 border-red-500 font-semibold'
                   : 'border-transparent hover:text-white'
               }`}
@@ -1363,7 +1766,7 @@ export default function App() {
                   : 'border-transparent hover:text-white'
               }`}
             >
-              Histórico ({session?.combat_log.length || 0})
+              Histórico de Partidas ({matchHistory.length})
             </a>
           </nav>
 
@@ -1449,7 +1852,7 @@ export default function App() {
                 setMobileMenuOpen(false);
               }}
               className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors flex items-center justify-between ${
-                activeTab === 'DASHBOARD'
+                activeTab === 'DASHBOARD' || activeTab === 'BOARD_SAVE'
                   ? 'bg-red-600/20 text-red-400 font-semibold'
                   : 'text-zinc-300 hover:bg-zinc-900 hover:text-white'
               }`}
@@ -1532,6 +1935,9 @@ export default function App() {
             onAddSurvivorToTable={handleAddSurvivorToTable}
             onRemoveSurvivorFromTable={handleRemoveSurvivorFromTable}
             onStartMatch={handleStartMatch}
+            matchHistory={matchHistory}
+            onLoadMatchWithPassword={handleLoadMatchWithPassword}
+            onDeleteMatchRecord={handleDeleteMatchRecord}
           />
         )}
 
@@ -1554,6 +1960,10 @@ export default function App() {
               viewedSurvivorId={viewedSurvivorId}
               onSelectViewedSurvivor={setViewedSurvivorId}
               onPassTurn={handlePassTurn}
+              onOpenBoardSave={() => setActiveTab('BOARD_SAVE')}
+              onSaveMatchToHistory={handleSaveMatchToHistory}
+              onHostAbandonRoom={handleHostAbandonRoom}
+              onPlayerAbandonMatch={handlePlayerAbandonMatch}
               onAdjustXP={handleAdjustXP}
               onAdjustWound={handleAdjustWound}
               onSpendAction={handleSpendAction}
@@ -1594,6 +2004,18 @@ export default function App() {
               </div>
             </div>
           )
+        )}
+
+        {activeTab === 'BOARD_SAVE' && (
+          <BoardStateSaveTracker
+            session={session}
+            currentUser={currentUser}
+            isCurrentUserHost={isCurrentUserHost}
+            onUpdateBoardSave={handleUpdateBoardSave}
+            onSaveMatchToHistory={handleSaveMatchToHistory}
+            onImportFullSession={handleImportFullSession}
+            onBackToDashboard={() => setActiveTab('DASHBOARD')}
+          />
         )}
 
         {activeTab === 'CATALOG' && <CatalogExplorer />}
@@ -1765,13 +2187,22 @@ export default function App() {
         )}
 
         {activeTab === 'LOG' && (
-          <div className="max-w-4xl mx-auto px-3.5 sm:px-6 py-6 sm:py-8 space-y-6">
+          <div className="max-w-5xl mx-auto px-3.5 sm:px-6 py-6 sm:py-8 space-y-6">
+            {/* Database Match History (PAUSADO, CONCLUIDO, ENCERRADO) with Room Password Authentication */}
+            <MatchHistoryPanel
+              matchHistory={matchHistory}
+              activeSession={session}
+              onLoadMatchWithPassword={handleLoadMatchWithPassword}
+              onDeleteMatchRecord={handleDeleteMatchRecord}
+            />
+
+            {/* Combat & Turn Log of the Active Room */}
             <div className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0C]/95 border border-zinc-800 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-800 pb-4 gap-2">
                 <div>
-                  <h1 className="text-xl sm:text-2xl font-bold text-white font-display">
-                    Registro Tático da Mesa
-                  </h1>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white font-display">
+                    Registro Tático de Eventos da Sala Ativa
+                  </h2>
                   <p className="text-xs text-zinc-400">
                     Histórico cronológico de turnos, evolução de XP, escolhas de habilidades, ferimentos e equipamentos.
                   </p>
@@ -1785,7 +2216,7 @@ export default function App() {
 
               {!session || session.combat_log.length === 0 ? (
                 <p className="text-xs text-zinc-400 py-6 text-center">
-                  Nenhum evento registrado ainda. Crie uma sala para iniciar o registro tático.
+                  Nenhum evento registrado na sala ativa ainda. Crie ou carregue uma sala acima para ver os eventos da partida.
                 </p>
               ) : (
                 <div className="divide-y divide-zinc-800/80">
@@ -1808,7 +2239,7 @@ export default function App() {
       </main>
 
       {/* Mobile Fixed Bottom Navigation Bar for One-Thumb Tabletop Control */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-black/95 backdrop-blur-md border-t border-red-950/80 grid grid-cols-5 px-1.5 py-1.5">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-black/95 backdrop-blur-md border-t border-red-950/80 grid grid-cols-5 px-1 py-1.5">
         <button
           type="button"
           onClick={() => {
@@ -1831,7 +2262,7 @@ export default function App() {
             setMobileMenuOpen(false);
           }}
           className={`flex flex-col items-center justify-center py-1.5 rounded-xl text-[10px] font-semibold transition-colors ${
-            activeTab === 'DASHBOARD'
+            activeTab === 'DASHBOARD' || activeTab === 'BOARD_SAVE'
               ? 'text-red-500 bg-red-950/30'
               : 'text-zinc-400 hover:text-white'
           }`}
