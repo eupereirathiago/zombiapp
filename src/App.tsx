@@ -32,6 +32,7 @@ import {
   VolumeX,
   RotateCcw,
   Users,
+  UserMinus,
   Menu,
   X,
   Skull,
@@ -206,6 +207,9 @@ export default function App() {
     tier: 'ORANGE' | 'RED';
     isManualEdit: boolean;
   } | null>(null);
+
+  // Trigger non-host player abandon modal from anywhere in the app
+  const [triggerPlayerAbandonModal, setTriggerPlayerAbandonModal] = useState<boolean>(false);
 
   useEffect(() => {
     try {
@@ -545,6 +549,7 @@ export default function App() {
         room_code: 'ZMB204',
         room_name: 'Mesa Zombicide',
         room_password_hash: computePasswordHash('mesa123', 'ZMB204'),
+        host_user_id: currentUser?.id || `usr_${username.trim() || 'host'}`,
         host_username: username.trim() || currentUser?.username || 'host',
         round: 1,
         first_player_index: 0,
@@ -800,7 +805,8 @@ export default function App() {
   const handlePlayerAbandonMatch = (
     survivorId: string,
     mode: 'MARK_DEAD' | 'REASSIGN',
-    targetUsername?: string
+    targetUsername?: string,
+    returnToLogin: boolean = false
   ) => {
     if (!session) return;
     const woundItem = ITEMS_DATABASE.find((i) => i.id === 'eq_wound')!;
@@ -844,11 +850,27 @@ export default function App() {
         };
       });
 
-      return {
+      const updatedSession: GameSession = {
         ...prev,
         survivors: nextSurvivors,
         combat_log: logMsg ? appendLog(prev, logMsg, 'WOUND') : prev.combat_log,
       };
+
+      if (returnToLogin) {
+        fetch('/api/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session: updatedSession }),
+        }).catch(() => {});
+
+        setTimeout(() => {
+          setSession(null);
+          setViewedSurvivorId('');
+          setActiveTab('LOBBY');
+        }, 120);
+      }
+
+      return updatedSession;
     });
   };
 
@@ -1082,7 +1104,8 @@ export default function App() {
       } | null = null;
 
       let logMsg = '';
-      let logType: GameSession['combat_log'][0]['type'] = 'XP';
+      let logType: 'TURN' | 'XP' | 'LEVEL_UP' | 'WOUND' | 'ITEM' | 'COMBAT' = 'XP';
+      let triggeredLevelUp = false;
 
       const nextSurvivors = prev.survivors.map((surv) => {
         if (surv.id !== survivorId) return surv;
@@ -1102,13 +1125,16 @@ export default function App() {
           modalToTrigger = { survivorId, tier: 'RED', isManualEdit: false };
           logMsg = `🌟 ${char.name} alcançou ${newXp} XP (Nível Vermelho)! Escolha 1 habilidade suprema.`;
           logType = 'LEVEL_UP';
+          triggeredLevelUp = true;
         } else if (crossedOrange) {
           modalToTrigger = { survivorId, tier: 'ORANGE', isManualEdit: false };
           logMsg = `🌟 ${char.name} alcançou ${newXp} XP (Nível Laranja)! Escolha 1 habilidade.`;
           logType = 'LEVEL_UP';
+          triggeredLevelUp = true;
         } else if (crossedYellow) {
           logMsg = `⚡ ${char.name} alcançou ${newXp} XP (Nível Amarelo) e desbloqueou automaticamente +1 Ação!`;
           logType = 'LEVEL_UP';
+          triggeredLevelUp = true;
         } else {
           logMsg = `${char.name} ${delta > 0 ? `ganhou +${delta}` : `ajustou ${delta}`} XP (Total: ${newXp} XP).`;
         }
@@ -1136,7 +1162,7 @@ export default function App() {
       if (modalToTrigger) {
         soundFX.playLevelUp();
         setPendingLevelUpModal(modalToTrigger);
-      } else if (logType === 'LEVEL_UP') {
+      } else if (triggeredLevelUp) {
         soundFX.playLevelUp();
       } else {
         soundFX.playClick();
@@ -1802,6 +1828,21 @@ export default function App() {
               )}
             </button>
 
+            {session && session.status === 'IN_PROGRESS' && !isCurrentUserHost && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('DASHBOARD');
+                  setTriggerPlayerAbandonModal(true);
+                }}
+                className="hidden sm:flex px-3.5 py-2 text-xs font-semibold text-red-300 bg-zinc-950 border border-red-800/60 rounded-lg hover:bg-red-950/60 transition-colors items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                title="Abandonar a partida a qualquer momento"
+              >
+                <UserMinus className="w-3.5 h-3.5 text-red-400" />
+                <span>Abandonar Partida</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleResetSessionToLogin}
@@ -1830,6 +1871,22 @@ export default function App() {
         {/* Mobile Dropdown Navigation Drawer */}
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-red-950/70 bg-black px-4 py-3 space-y-1">
+            {session && session.status === 'IN_PROGRESS' && !isCurrentUserHost && (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('DASHBOARD');
+                  setTriggerPlayerAbandonModal(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-semibold transition-colors flex items-center justify-between text-red-300 bg-red-950/30 border border-red-800/40 hover:bg-red-950/60 cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <UserMinus className="w-4 h-4 text-red-400" />
+                  <span>Abandonar Partida</span>
+                </span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1983,6 +2040,8 @@ export default function App() {
               onUseConsumable={handleUseConsumable}
               onCombineMolotov={handleCombineMolotov}
               onRollWeaponAttack={handleRollWeaponAttack}
+              externalOpenAbandonModal={triggerPlayerAbandonModal}
+              onCloseExternalAbandonModal={() => setTriggerPlayerAbandonModal(false)}
             />
           ) : (
             <div className="max-w-2xl mx-auto px-4 py-12 text-center space-y-4">

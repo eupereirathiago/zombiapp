@@ -171,12 +171,18 @@ export const CatalogExplorer: React.FC = () => {
                         </span>
                       )}
                       {item.noise_on_use ? (
-                        <Volume2 className="w-4 h-4 text-red-500" title="Gera Barulho" />
+                        <span title="Gera Barulho">
+                          <Volume2 className="w-4 h-4 text-red-500" />
+                        </span>
                       ) : (
-                        <VolumeX className="w-4 h-4 text-zinc-500" title="Silenciosa" />
+                        <span title="Silenciosa">
+                          <VolumeX className="w-4 h-4 text-zinc-500" />
+                        </span>
                       )}
                       {item.can_open_doors && (
-                        <DoorOpen className="w-4 h-4 text-red-400" title="Arromba Portas" />
+                        <span title="Arromba Portas">
+                          <DoorOpen className="w-4 h-4 text-red-400" />
+                        </span>
                       )}
                     </div>
                   </div>
